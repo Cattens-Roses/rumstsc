@@ -431,9 +431,18 @@ fn cancellation_interrupts_a_blocked_handshake() {
     let peer = thread::spawn(move || {
         let mut s = accept(listener);
         s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        wire::read_tpkt(&mut s).unwrap();
-        let mut b = [0];
-        assert_eq!(s.read(&mut b).unwrap(), 0);
+        // Disconnect may win the race before the client finishes the first
+        // TPKT (especially on Windows CI). Either a full header then EOF, or
+        // UnexpectedEof mid-read, means the handshake was cancelled.
+        match wire::read_tpkt(&mut s) {
+            Ok(_) => {
+                let mut b = [0];
+                assert_eq!(s.read(&mut b).unwrap(), 0);
+            }
+            Err(rumstsc_rdp::Error::Io(e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            Err(e) => panic!("expected TPKT or cancel EOF, got {e}"),
+        }
     });
     let c = Connection::start(o).unwrap();
     thread::sleep(Duration::from_millis(80));

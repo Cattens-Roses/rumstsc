@@ -8,7 +8,19 @@ if [ "${1:-}" != --inside ]; then
         echo 'Run this isolated mount-namespace test as root (or through sudo).' >&2
         exit 1
     fi
-    exec unshare --mount --propagation private bash "$0" --inside "${1:-tls}"
+    # Create TLS material on the host filesystem before entering the mount
+    # namespace. Overlaying /etc with tmpfs hides /etc/ssl/openssl.cnf, and
+    # openssl req then fails with no useful diagnostics under set -e.
+    if [ ! -f "$work/key.pem" ] || [ ! -f "$work/cert.pem" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$work/key.pem" -out "$work/cert.pem" -days 1 \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+    fi
+    openssl x509 -in "$work/cert.pem" -outform DER \
+        | sha256sum | cut -d' ' -f1 > "$work/pin.txt"
+    script=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    exec unshare --mount --propagation private bash "$script" --inside "${1:-tls}"
 fi
 mode=${2:-tls}
 case "$mode" in tls) layer=tls;; legacy) layer=rdp;; *) echo 'mode must be tls or legacy' >&2; exit 1;; esac
@@ -18,6 +30,7 @@ if [ "$(readlink /proc/self/ns/mnt)" = "$(readlink /proc/1/ns/mnt)" ]; then
     echo 'Refusing resource mounts in the host mount namespace' >&2
     exit 1
 fi
+pin=$(cat "$work/pin.txt")
 mount -t tmpfs tmpfs /etc
 mkdir -p /etc/xrdp
 cp "$work/root/etc/xrdp/"*ini /etc/xrdp/
@@ -28,10 +41,7 @@ mount -t tmpfs tmpfs /run
 mkdir -p /run/xrdp/sockdir
 export LD_LIBRARY_PATH="$work/root/usr/lib/x86_64-linux-gnu/xrdp:$work/root/usr/lib/xrdp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 "$work/root/usr/bin/xrdp-keygen" xrdp /etc/xrdp/rsakeys.ini >/dev/null
-if [ ! -f "$work/key.pem" ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/key.pem" -out "$work/cert.pem" -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1 >/dev/null 2>&1
-fi
-pin=$(openssl x509 -in "$work/cert.pem" -outform DER | sha256sum | cut -d' ' -f1)
+
 cat > "$work/smoke.ini" <<EOF
 [Globals]
 ini_version=1

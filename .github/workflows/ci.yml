@@ -40,5 +40,8 @@ jobs:
           CARGO_TARGET_DIR=.interop/target-linux cargo build --locked --no-default-features --bin rumstsc-probe
       - name: Verify real TLS and legacy sessions
         run: |
-          sudo bash scripts/xrdp-smoke.sh tls
-          sudo bash scripts/xrdp-smoke.sh legacy
+          # Surface server logs if the isolated smoke fails mid-run.
+          sudo bash scripts/xrdp-smoke.sh tls \
+            || { sudo tail -n 80 .interop/xrdp/console.log .interop/xrdp/server.log 2>/dev/null; exit 1; }
+          sudo bash scripts/xrdp-smoke.sh legacy \
+            || { sudo tail -n 80 .interop/xrdp/console.log .interop/xrdp/server.log 2>/dev/null; exit 1; }
