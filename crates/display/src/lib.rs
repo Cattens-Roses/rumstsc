@@ -9,7 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::SyncSender,
     },
 };
@@ -45,18 +45,27 @@ struct Mailbox {
     tiles: BTreeMap<usize, TilePixels>,
     resize: bool,
     pointer: Option<Pointer>,
+    upscale: bool,
 }
 struct Shared {
     mailbox: Mutex<Mailbox>,
     error: Mutex<Option<String>>,
     stop: AtomicBool,
     captured: AtomicBool,
+    controls_request: AtomicU8,
     first_presented: AtomicBool,
     notified: AtomicBool,
     wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     trace: Arc<rumstsc_rdp::trace::Trace>,
 }
 impl Shared {
+    fn hover_controls(&self, buffer: &Buffer, x: i32, y: i32, buttons: u16) {
+        if buffer.upscale && buttons == 0 {
+            let corner = x >= buffer.bounds.width as i32 - 32 && (0..32).contains(&y);
+            self.controls_request
+                .store(if corner { 1 } else { 2 }, Ordering::Release);
+        }
+    }
     fn presented(&self, buffer: &Buffer) {
         if !buffer.pixels.is_empty()
             && buffer.viewport().width > 0
@@ -82,6 +91,7 @@ impl Display {
             error: Mutex::new(None),
             stop: AtomicBool::new(false),
             captured: AtomicBool::new(true),
+            controls_request: AtomicU8::new(0),
             first_presented: AtomicBool::new(false),
             notified: AtomicBool::new(false),
             wake: Mutex::new(None),
@@ -115,6 +125,13 @@ impl Display {
     pub fn pointer(&self, pointer: Pointer) {
         self.handle.0.mailbox.lock().unwrap().pointer = Some(pointer);
         self.handle.wake();
+    }
+    pub fn take_controls_request(&self) -> Option<bool> {
+        match self.handle.0.controls_request.swap(0, Ordering::AcqRel) {
+            1 => Some(true),
+            2 => Some(false),
+            _ => None,
+        }
     }
     pub fn captured(&self) -> bool {
         self.handle.0.captured.load(Ordering::Acquire)
@@ -157,6 +174,15 @@ impl Drop for Display {
     }
 }
 impl Handle {
+    pub fn upscale(&self, upscale: bool) {
+        let mut m = self.0.mailbox.lock().unwrap();
+        if m.upscale == upscale {
+            return;
+        }
+        m.upscale = upscale;
+        drop(m);
+        self.wake();
+    }
     pub fn bounds(&self, bounds: Bounds) {
         let mut m = self.0.mailbox.lock().unwrap();
         if m.bounds == bounds {
@@ -181,6 +207,7 @@ struct Buffer {
     pixels: Vec<u8>,
     bounds: Bounds,
     pointer: Option<Pointer>,
+    upscale: bool,
 }
 impl Buffer {
     fn receive(&mut self, shared: &Shared) -> Result<(), String> {
@@ -188,6 +215,7 @@ impl Buffer {
         let _span = shared.trace.span("native_tile_apply", "native", 0);
         let mut m = shared.mailbox.lock().unwrap();
         self.bounds = m.bounds;
+        self.upscale = m.upscale;
         if let Some(pointer) = m.pointer.take() {
             self.pointer = Some(pointer);
         }
@@ -222,7 +250,7 @@ impl Buffer {
         }
         let scale = (self.bounds.width as f64 / self.width as f64)
             .min(self.bounds.height as f64 / self.height as f64)
-            .min(1.0);
+            .min(if self.upscale { f64::INFINITY } else { 1.0 });
         let w = (self.width as f64 * scale).round().max(1.0) as u32;
         let h = (self.height as f64 * scale).round().max(1.0) as u32;
         Bounds {
@@ -324,12 +352,47 @@ impl Keys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fullscreen_fills_matching_monitor_and_corner_does_not_interrupt_drag() {
+        let shared = shared();
+        let mut buffer = Buffer {
+            width: 1280,
+            height: 720,
+            upscale: true,
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            (buffer.viewport().width, buffer.viewport().height),
+            (1920, 1080)
+        );
+        assert_eq!(buffer.point(1919, 1079), Some((1279, 719)));
+        shared.hover_controls(&buffer, 1919, 0, 0);
+        assert_eq!(shared.controls_request.swap(0, Ordering::AcqRel), 1);
+        shared.hover_controls(&buffer, 100, 100, 0);
+        assert_eq!(shared.controls_request.swap(0, Ordering::AcqRel), 2);
+        shared.hover_controls(&buffer, 1919, 0, 0x1000);
+        assert_eq!(shared.controls_request.load(Ordering::Acquire), 0);
+        buffer.upscale = false;
+        assert_eq!(
+            (buffer.viewport().width, buffer.viewport().height),
+            (1280, 720)
+        );
+        shared.hover_controls(&buffer, 1919, 0, 0);
+        assert_eq!(shared.controls_request.load(Ordering::Acquire), 0);
+    }
     fn shared() -> Arc<Shared> {
         Arc::new(Shared {
             mailbox: Mutex::new(Mailbox::default()),
             error: Mutex::new(None),
             stop: AtomicBool::new(false),
             captured: AtomicBool::new(false),
+            controls_request: AtomicU8::new(0),
             first_presented: AtomicBool::new(false),
             notified: AtomicBool::new(false),
             wake: Mutex::new(None),

@@ -25,6 +25,10 @@ rumstsc
 
 Package metadata and install instructions are also published at [cattens-roses.github.io/rumstsc](https://cattens-roses.github.io/rumstsc/).
 
+### GitHub Releases
+
+Every push to `main` updates a [continuous prerelease](https://github.com/Cattens-Roses/rumstsc/releases/tag/continuous) with the latest `.deb` and Windows zip. Push a tag `v*` (for example `v0.1.0`) for a stable release with generated notes.
+
 ## Build and run
 
 Use a current stable Rust toolchain (edition 2024). On Debian/Ubuntu, install GPUI's native build dependencies:
@@ -202,3 +206,13 @@ Slow-path system, color, new and cached pointer updates are decoded with a bound
 ### Application icon
 
 `rdpicon.svg` is the icon source, embedded directly in GPUI and tinted for either theme. Run `cargo run --locked --manifest-path scripts/icon-export/Cargo.toml` to regenerate the launcher SVG, transparent PNG sizes (16–512 px), multi-resolution Windows ICO, and X11 ARGB property data. Generated assets are committed so normal builds do not need the exporter. Windows embeds resource 1 for Explorer, the title bar and taskbar; Linux packages install the hicolor icons and desktop entry with matching application ID.
+
+### Workspace preferences
+
+Open **Settings** in the header for Appearance, Display, Performance and Privacy. Theme selection is available only there. Preferences save automatically and existing settings migrate with safe defaults. Display presets and renderer selection apply on the next connection; appearance, status bar and presentation limits apply immediately. The header's **Full screen / Windowed** button works before or during a session. F11 also toggles it when remote keyboard capture is released. An optional setting enters full screen after activation.
+
+Presentation profiles cap UI refresh at approximately 60, 30 or 15 updates per second. Battery saver reduces snapshot requests, image uploads and UI wakeups; it does not skip protocol decoding or guarantee a particular battery-life improvement. Background presentation is paused by default while the app is unfocused or showing Settings. The network connection and decoder continue, and returning to the desktop requests accumulated changes. History can be disabled or cleared; credentials are never persisted.
+
+UI code is separated into connection, desktop, chrome and preferences views under `src/app/`, shared controls in `src/ui.rs`, and persistence in `src/settings.rs`.
+
+Full screen hides the application header and status bar, giving the desktop the complete monitor area. Move to the upper-right 32-pixel corner to reveal the controls; move back into the desktop to hide them. This also works with the native Windows/X11 renderer, without interrupting a remote mouse drag. Ctrl+Alt+Home still releases input and reveals controls; F11 or Escape exits full screen after releasing capture. Native presentation can upscale in full screen while preserving aspect ratio and input coordinates.

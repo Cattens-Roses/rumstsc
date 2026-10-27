@@ -186,6 +186,11 @@ unsafe extern "system" fn procedure(
             | WM_MBUTTONUP | WM_MOUSEMOVE => {
                 let x = lparam.0 as u16 as i16 as i32;
                 let y = (lparam.0 >> 16) as u16 as i16 as i32;
+                if message == WM_MOUSEMOVE {
+                    state
+                        .shared
+                        .hover_controls(&state.buffer, x, y, state.keys.buttons);
+                }
                 let flag = match message {
                     WM_LBUTTONDOWN => 0x9000,
                     WM_LBUTTONUP => 0x1000,
@@ -484,6 +489,7 @@ mod tests {
             let old = SelectObject(dc, bitmap.into());
             let buffer = Buffer {
                 pointer: None,
+                upscale: false,
                 width: 2,
                 height: 1,
                 pixels: vec![10, 20, 30, 255, 40, 50, 60, 255],

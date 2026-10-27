@@ -1,5 +1,16 @@
-use crate::{input::TextField, keyboard::scancode, settings::Settings, theme::Theme};
+mod chrome;
+mod connect;
+mod desktop;
+mod preferences;
+use crate::{
+    input::TextField,
+    keyboard::scancode,
+    settings::{PowerProfile, Settings},
+    theme::Theme,
+    ui::*,
+};
 use gpui::{prelude::*, *};
+use preferences::SettingsTab;
 #[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rumstsc_rdp::{
@@ -38,6 +49,11 @@ pub struct Client {
     graphics_mode: String,
     focus: FocusHandle,
     advanced: bool,
+    show_settings: bool,
+    settings_tab: SettingsTab,
+    window_active: bool,
+    pending_fullscreen: bool,
+    fullscreen_controls: bool,
     insecure: bool,
     connection: Option<Connection>,
     poll_task: Option<Task<()>>,
@@ -122,7 +138,8 @@ impl Client {
             cx.notify();
         });
         let activation = cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
+            this.window_active = window.is_window_active();
+            if !this.window_active {
                 this.release_input();
                 cx.notify();
             }
@@ -144,6 +161,11 @@ impl Client {
             session_security: String::new(),
             focus,
             advanced: false,
+            show_settings: false,
+            settings_tab: SettingsTab::Appearance,
+            window_active: window.is_window_active(),
+            pending_fullscreen: false,
+            fullscreen_controls: false,
             insecure: false,
             connection: None,
             poll_task: None,
@@ -256,7 +278,10 @@ impl Client {
         }
         self.poll_task = Some(cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(16)).await;
+                let Ok(interval) = this.update(cx, |this, _| this.presentation_interval()) else {
+                    break;
+                };
+                Timer::after(interval).await;
                 if !matches!(this.update(cx, |this, cx| this.poll(cx)), Ok(true)) {
                     break;
                 }
@@ -318,6 +343,7 @@ impl Client {
                             Err(error) => self.error = Some(error),
                         }
                     }
+                    self.pending_fullscreen = self.settings.start_fullscreen;
                     self.active = true;
                     self.capture = true;
                     self.status = format!("Connected · {}", self.session_security);
@@ -359,12 +385,25 @@ impl Client {
             let captured = display.captured();
             if self.capture != captured {
                 self.capture = captured;
+                self.fullscreen_controls = !captured;
+                changed = true;
+            }
+            if let Some(show) = display.take_controls_request()
+                && self.fullscreen_controls != show
+            {
+                self.fullscreen_controls = show;
                 changed = true;
             }
         }
         // Never block the UI while the worker decodes a bitmap. Coalesce updates
         // into the latest complete snapshot and retry next tick when it is busy.
-        let snapshot = self.connection.as_ref().and_then(|c| c.take_snapshot());
+        let presenting =
+            !self.show_settings && (self.window_active || !self.settings.pause_background);
+        let snapshot = if presenting {
+            self.connection.as_ref().and_then(|c| c.take_snapshot())
+        } else {
+            None
+        };
         if let Some(snapshot) = snapshot {
             if let Some(display) = &self.native {
                 self.frame_generation = snapshot.generation;
@@ -406,7 +445,7 @@ impl Client {
                 changed = true;
             }
         }
-        if let Some(connection) = &self.connection {
+        if presenting && let Some(connection) = &self.connection {
             connection.request_snapshot(self.frame_generation, self.revision);
         }
         if changed {
@@ -484,8 +523,19 @@ impl Client {
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = e.keystroke.key.as_str();
         let mods = e.keystroke.modifiers;
+        if self.show_settings {
+            if key == "escape" {
+                self.open_settings(false, cx);
+            }
+            return;
+        }
+        if (key == "f11" || (key == "escape" && window.is_fullscreen())) && !self.capture {
+            self.toggle_fullscreen(window, cx);
+            return;
+        }
         if mods.control && mods.alt && key == "home" {
             self.release_input();
+            self.fullscreen_controls = true;
             self.status = "Input released · click the desktop to resume".into();
             cx.notify();
             return;
@@ -550,695 +600,5 @@ impl Client {
         let y = ((p.y - b.top()) / b.size.height * self.desktop.1 as f32)
             .clamp(0., (self.desktop.1 - 1) as f32) as u16;
         self.send(Input::Mouse { x, y, flags });
-    }
-    fn form(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = self.settings.theme.palette();
-        let busy = self.connection.is_some();
-        let mut card = div()
-            .w_full()
-            .flex_shrink_0()
-            .max_w(px(480.))
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_6()
-            .bg(p.panel)
-            .border_1()
-            .border_color(p.border)
-            .rounded(px(16.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(desktop_mark(p.accent, p.soft, 40.))
-                    .child(
-                        div()
-                            .mt_2()
-                            .text_xs()
-                            .text_color(p.accent)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("YOUR WORKSPACE, ANYWHERE"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(28.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Connect to a desktop"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(p.muted)
-                            .child("Your remote computer. One simple connection."),
-                    ),
-            );
-        if !busy {
-            card = card
-                .child(div().h(px(1.)).bg(p.border))
-                .child(field("Computer", self.host.clone(), p.muted))
-                .child(field("User name", self.user.clone(), p.muted))
-                .child(field("Password", self.password.clone(), p.muted))
-                .when(!self.settings.recent.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(div().py_1().text_xs().text_color(p.muted).child("Recent"))
-                            .children(self.settings.recent.iter().take(3).enumerate().map(
-                                |(i, h)| {
-                                    let host = h.clone();
-                                    div()
-                                        .id(("recent", i))
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_sm()
-                                        .text_xs()
-                                        .text_color(p.muted)
-                                        .bg(p.field)
-                                        .hover(|s| s.bg(p.soft).text_color(p.accent))
-                                        .cursor_pointer()
-                                        .child(h.clone())
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.host.update(cx, |f, cx| f.set(host.clone(), cx))
-                                        }))
-                                },
-                            )),
-                    )
-                })
-                .child(
-                    div()
-                        .id("options")
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(p.border)
-                        .hover(|s| s.text_color(p.text))
-                        .text_sm()
-                        .text_color(p.accent)
-                        .cursor_pointer()
-                        .child(if self.advanced {
-                            "Advanced options   −"
-                        } else {
-                            "Advanced options   +"
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.advanced = !this.advanced;
-                            cx.notify();
-                        })),
-                )
-                .when(self.advanced, |d| {
-                    d.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_4()
-                            .p_4()
-                            .bg(p.field)
-                            .rounded(px(10.))
-                            .child(field("Domain", self.domain.clone(), p.muted))
-                            .child(
-                                div().flex().flex_wrap().gap_2().children(
-                                    [
-                                        (SecurityMode::Auto, "TLS / NLA"),
-                                        (SecurityMode::Nla, "NLA only"),
-                                        (SecurityMode::Tls, "TLS only"),
-                                        (SecurityMode::Legacy, "Legacy"),
-                                    ]
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(
-                                        |(i, (mode, label))| {
-                                            div()
-                                                .id(("security", i))
-                                                .px_2()
-                                                .py_1()
-                                                .rounded_md()
-                                                .border_1()
-                                                .bg(if self.security_mode == mode {
-                                                    p.soft
-                                                } else {
-                                                    p.panel
-                                                })
-                                                .text_color(if self.security_mode == mode {
-                                                    p.accent
-                                                } else {
-                                                    p.muted
-                                                })
-                                                .hover(|s| s.bg(p.soft))
-                                                .border_color(if self.security_mode == mode {
-                                                    p.accent
-                                                } else {
-                                                    p.border
-                                                })
-                                                .cursor_pointer()
-                                                .text_xs()
-                                                .child(label)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.security_mode = mode;
-                                                    cx.notify();
-                                                }))
-                                        },
-                                    ),
-                                ),
-                            )
-                            .child(field(
-                                "Certificate SHA-256 pin (optional for TLS)",
-                                self.certificate_pin.clone(),
-                                p.muted,
-                            ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .id("native-display")
-                                            .px_2()
-                                            .py_2()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(p.border)
-                                            .text_sm()
-                                            .cursor_pointer()
-                                            .child(if self.settings.native_display {
-                                                "Display: native framebuffer"
-                                            } else {
-                                                "Display: GPUI"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.settings.native_display =
-                                                    !this.settings.native_display;
-                                                this.persist();
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(p.muted).child("DESKTOP SIZE"),
-                                    )
-                                    .child(div().flex().gap_2().children(
-                                        RESOLUTIONS.iter().enumerate().map(|(i, (w, h))| {
-                                            div()
-                                                .id(("resolution", i))
-                                                .flex_1()
-                                                .py_2()
-                                                .text_center()
-                                                .text_xs()
-                                                .rounded_md()
-                                                .border_1()
-                                                .bg(if self.settings.resolution == i {
-                                                    p.soft
-                                                } else {
-                                                    p.panel
-                                                })
-                                                .text_color(if self.settings.resolution == i {
-                                                    p.accent
-                                                } else {
-                                                    p.muted
-                                                })
-                                                .hover(|s| s.bg(p.soft))
-                                                .border_color(if self.settings.resolution == i {
-                                                    p.accent
-                                                } else {
-                                                    p.border
-                                                })
-                                                .cursor_pointer()
-                                                .child(format!("{w} × {h}"))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.settings.resolution = i;
-                                                    this.persist();
-                                                    cx.notify();
-                                                }))
-                                        }),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .id("insecure")
-                                    .flex()
-                                    .gap_2()
-                                    .text_xs()
-                                    .text_color(p.muted)
-                                    .cursor_pointer()
-                                    .child(if self.insecure { "[✓]" } else { "[ ]" })
-                                    .child("Allow plaintext RDP for an isolated test server")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.insecure = !this.insecure;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                });
-        }
-        if let Some(error) = &self.error {
-            card = card.child(
-                div()
-                    .p_3()
-                    .rounded(px(8.))
-                    .bg(p.field)
-                    .border_1()
-                    .border_color(p.error)
-                    .text_sm()
-                    .text_color(p.error)
-                    .child(error.clone()),
-            );
-        }
-        if let Some(certificate) = &self.certificate_review {
-            let fingerprint = certificate.fingerprint.clone();
-            // Split the hash into short lines so the entire fingerprint is visible
-            // on the compact connection card in either theme.
-            let fingerprint_lines = fingerprint
-                .as_bytes()
-                .chunks(32)
-                .map(|line| String::from_utf8_lossy(line).into_owned())
-                .collect::<Vec<_>>();
-            card = card.child(div().flex().flex_col().gap_3()
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("Server identity could not be verified"))
-                .child(div().text_sm().child(format!("Computer: {}", certificate.host)))
-                .child(div().text_xs().text_color(p.error).child(certificate.reason.clone()))
-                .child(div().text_xs().child(format!("Subject: {}", certificate.subject)))
-                .child(div().text_xs().child(format!("Issuer: {}", certificate.issuer)))
-                .child(div().text_xs().text_color(p.muted).child("CERTIFICATE SHA-256"))
-                .child(div().flex().flex_col().text_xs().children(fingerprint_lines.into_iter().map(|line| div().child(line))))
-                .child(div().text_sm().child("Compare this fingerprint with the server administrator through a trusted channel. Continuing accepts this identity for this connection only, including any certificate name or validity errors. Credentials will be sent only after approval."))
-                .child(div().id("trust-certificate-once").px_3().py_2().rounded_md()
-                    .border_1().border_color(p.accent).text_color(p.accent).cursor_pointer()
-                    .child("Trust once and connect")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(connection) = &this.connection {
-                            connection.trust_certificate_once(&fingerprint);
-                        }
-                        this.certificate_review = None;
-                        this.status = "Completing TLS verification…".into();
-                        cx.notify();
-                    }))));
-        } else if busy {
-            card = card.child(
-                div()
-                    .text_sm()
-                    .text_color(p.accent)
-                    .child(self.status.clone()),
-            );
-        }
-        let button_text = if busy {
-            p.text
-        } else if self.settings.theme == Theme::Dark {
-            rgb(0x102238).into()
-        } else {
-            rgb(0xffffff).into()
-        };
-        card=card.child(div().id("connect").h(px(46.)).flex().items_center().justify_center().rounded(px(8.)).bg(if busy{p.soft}else{p.accent}).text_color(button_text).font_weight(FontWeight::SEMIBOLD).cursor_pointer().hover(|s| s.opacity(0.88)).child(if busy{"Cancel connection"}else{"Connect to desktop  →"}).on_click(cx.listener(|this,_,window,cx|{if this.connection.is_some(){this.disconnect(window, cx);}else{this.connect(window,cx);}})))
-            .child(div().text_xs().text_color(p.muted).child("Passwords are never saved. Server identity is verified with system trust or your certificate pin. Legacy connections require a pin."));
-        div()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .id("form-scroll")
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .items_center()
-            .p_6()
-            .child(card)
-            .into_any_element()
-    }
-    fn remote(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(display) = &self.native {
-            let display = display.handle();
-            return div()
-                .id("native-desktop")
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .relative()
-                .bg(rgb(0x07090b))
-                .child(
-                    canvas(
-                        move |bounds, window, _| {
-                            let scale = window.scale_factor();
-                            display.bounds(rumstsc_display::Bounds {
-                                x: (f32::from(bounds.left()) * scale).round() as i32,
-                                y: (f32::from(bounds.top()) * scale).round() as i32,
-                                width: (f32::from(bounds.size.width) * scale).round().max(0.)
-                                    as u32,
-                                height: (f32::from(bounds.size.height) * scale).round().max(0.)
-                                    as u32,
-                            });
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-                .into_any_element();
-        }
-        let tiles: Vec<_> = self.tiles.values().cloned().collect();
-        let trace = self.connection.as_ref().map(|c| c.trace.clone());
-        let first_paint = self.first_paint.clone();
-        let (width, height) = self.desktop;
-        let entity = cx.entity();
-        let has_image = !tiles.is_empty();
-        let pointer_image = self.pointer_image.clone();
-        let remote_pointer = self.remote_pointer.clone();
-        let mut desktop = div()
-            .id("desktop")
-            .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
-            .cursor(
-                if matches!(self.remote_pointer, rumstsc_rdp::pointer::Pointer::Default) {
-                    CursorStyle::Arrow
-                } else {
-                    CursorStyle::None
-                },
-            )
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .relative()
-            .overflow_hidden()
-            .bg(rgb(0x07090b))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, window, cx| {
-                    this.focus.focus(window);
-                    this.capture = true;
-                    this.mouse |= 0x1000;
-                    this.pointer(e.position, 0x9000);
-                    cx.notify();
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, e: &MouseDownEvent, _, _| {
-                    this.mouse |= 0x2000;
-                    this.pointer(e.position, 0xa000);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Middle,
-                cx.listener(|this, e: &MouseDownEvent, _, _| {
-                    this.mouse |= 0x4000;
-                    this.pointer(e.position, 0xc000);
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                this.pointer(e.position, 0x0800);
-                if this.pointer_image.is_some() {
-                    cx.notify();
-                }
-            }));
-        for (button, flag) in [
-            (MouseButton::Left, 0x1000),
-            (MouseButton::Right, 0x2000),
-            (MouseButton::Middle, 0x4000),
-        ] {
-            desktop = desktop
-                .on_mouse_up(
-                    button,
-                    cx.listener(move |this, e: &MouseUpEvent, _, _| {
-                        this.mouse &= !flag;
-                        this.pointer(e.position, flag);
-                    }),
-                )
-                .on_mouse_up_out(
-                    button,
-                    cx.listener(move |this, e: &MouseUpEvent, _, _| {
-                        this.mouse &= !flag;
-                        this.pointer(e.position, flag);
-                    }),
-                );
-        }
-        desktop = desktop
-            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, _| {
-                let delta = e.delta.pixel_delta(px(20.)).y;
-                let flags = if delta < px(0.) {
-                    0x0200 | 0x0100 | 0x88
-                } else {
-                    0x0200 | 120
-                };
-                this.pointer(e.position, flags);
-            }))
-            .child(
-                canvas(
-                    move |bounds, _, cx| {
-                        let scale = (bounds.size.width / px(width as f32))
-                            .min(bounds.size.height / px(height as f32));
-                        let sz = size(px(width as f32 * scale), px(height as f32 * scale));
-                        let b = Bounds::new(
-                            point(
-                                bounds.left() + (bounds.size.width - sz.width) / 2.,
-                                bounds.top() + (bounds.size.height - sz.height) / 2.,
-                            ),
-                            sz,
-                        );
-                        entity.update(cx, |this, _| {
-                            this.bounds = Some(b);
-                        });
-                        b
-                    },
-                    move |_, bounds, window, _| {
-                        let _span = trace
-                            .as_ref()
-                            .map(|t| t.span("tile_upload_submit", "ui", tiles.len() as u64));
-                        let has_tiles = !tiles.is_empty();
-                        let scale = bounds.size.width / px(width as f32);
-                        for tile in tiles {
-                            let tile_bounds = Bounds::new(
-                                point(
-                                    bounds.left() + px(tile.left as f32 * scale),
-                                    bounds.top() + px(tile.top as f32 * scale),
-                                ),
-                                size(
-                                    px(tile.width as f32 * scale),
-                                    px(tile.height as f32 * scale),
-                                ),
-                            );
-                            let _ = window.paint_image(
-                                tile_bounds,
-                                Corners::default(),
-                                tile.image,
-                                0,
-                                false,
-                            );
-                        }
-                        if let (rumstsc_rdp::pointer::Pointer::Image(pointer), Some(image)) =
-                            (&remote_pointer, &pointer_image)
-                        {
-                            let position = window.mouse_position();
-                            if bounds.contains(&position) {
-                                let cursor_bounds = Bounds::new(
-                                    point(
-                                        position.x - px(pointer.hot_x as f32),
-                                        position.y - px(pointer.hot_y as f32),
-                                    ),
-                                    size(px(pointer.width as f32), px(pointer.height as f32)),
-                                );
-                                let _ = window.paint_image(
-                                    cursor_bounds,
-                                    Corners::default(),
-                                    image.clone(),
-                                    0,
-                                    false,
-                                );
-                            }
-                        }
-                        if has_tiles
-                            && !first_paint.swap(true, Ordering::Relaxed)
-                            && let Some(trace) = &trace
-                        {
-                            trace.mark("first_frame_submitted", "ui", 0);
-                        }
-                    },
-                )
-                .size_full(),
-            );
-        if !has_image {
-            desktop = desktop.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgb(0x9aa5af))
-                    .child("Waiting for the first desktop update…"),
-            );
-        }
-        desktop.into_any_element()
-    }
-}
-fn desktop_mark(ink: Hsla, background: Hsla, size: f32) -> impl IntoElement {
-    div()
-        .size(px(size))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(size * 0.25))
-        .bg(background)
-        .child(
-            svg()
-                .path("rdpicon.svg")
-                .size(px(size * 0.8))
-                .text_color(ink),
-        )
-}
-fn field(label: &'static str, input: Entity<TextField>, muted: Hsla) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(muted)
-                .child(label),
-        )
-        .child(input)
-}
-impl Render for Client {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.first_render {
-            self.startup_trace.mark("first_view_render", "ui", 0);
-            self.first_render = true;
-        }
-        let p = self.settings.theme.palette();
-        let active = self.active;
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(p.bg)
-            .text_color(p.text)
-            .font_family(if cfg!(target_os = "linux") {
-                "sans-serif"
-            } else {
-                "Segoe UI"
-            })
-            .text_sm()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::key))
-            .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, cx| {
-                if let Some((code, extended)) = scancode(&e.keystroke.key)
-                    && this.held.remove(&(code, extended))
-                {
-                    this.send(Input::Scancode {
-                        code,
-                        extended,
-                        released: true,
-                    });
-                }
-                if this.capture {
-                    cx.stop_propagation();
-                }
-            }))
-            .on_modifiers_changed(
-                cx.listener(|this, e: &ModifiersChangedEvent, _, _| this.modifiers(e.modifiers)),
-            )
-            .child(
-                div()
-                    .h(px(64.))
-                    .flex_shrink_0()
-                    .px_5()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(p.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(desktop_mark(p.accent, p.soft, 30.))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("rumstsc")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .when(active, |d| {
-                                d.child(
-                                    div()
-                                        .id("disconnect")
-                                        .cursor_pointer()
-                                        .text_color(p.error)
-                                        .child("Disconnect")
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.disconnect(window, cx)
-                                        })),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id("theme")
-                                    .h(px(32.))
-                                    .flex()
-                                    .items_center()
-                                    .bg(p.panel)
-                                    .hover(|s| s.bg(p.soft))
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(p.border)
-                                    .cursor_pointer()
-                                    .child(if self.settings.theme == Theme::Dark {
-                                        "Light theme"
-                                    } else {
-                                        "Dark theme"
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
-                            ),
-                    ),
-            )
-            .child(if active {
-                self.remote(cx)
-            } else {
-                self.form(cx)
-            })
-            .child(
-                div()
-                    .h(px(36.))
-                    .flex_shrink_0()
-                    .px_5()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .border_t_1()
-                    .border_color(p.border)
-                    .text_xs()
-                    .text_color(p.muted)
-                    .child(if active {
-                        format!(
-                            "{} × {} · {} · {} · {}",
-                            self.desktop.0,
-                            self.desktop.1,
-                            if self.native.is_some() {
-                                "Native"
-                            } else {
-                                "GPUI"
-                            },
-                            self.graphics_mode,
-                            if self.capture {
-                                "Input captured"
-                            } else {
-                                "Input released"
-                            }
-                        )
-                    } else {
-                        self.status.clone()
-                    })
-                    .child(if active {
-                        "Ctrl+Alt+Home releases input"
-                    } else {
-                        "Remote desktop"
-                    }),
-            )
     }
 }

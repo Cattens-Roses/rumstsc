@@ -12,7 +12,44 @@ permissions:
   id-token: write
 
 jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and release metadata
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            RELEASE_TAG="v${VERSION}"
+            RELEASE_NAME="rumstsc ${VERSION}"
+            PRERELEASE=false
+            MAKE_LATEST=true
+          else
+            BASE="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+            VERSION="${BASE}+git.${GITHUB_SHA::7}"
+            RELEASE_TAG="continuous"
+            RELEASE_NAME="Continuous build (${GITHUB_SHA::7})"
+            PRERELEASE=true
+            MAKE_LATEST=false
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "release_name=${RELEASE_NAME}"
+            echo "prerelease=${PRERELEASE}"
+            echo "make_latest=${MAKE_LATEST}"
+          } >> "$GITHUB_OUTPUT"
+
   build-deb:
+    needs: [meta]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -27,17 +64,6 @@ jobs:
             libwayland-dev libxcb1-dev libx11-xcb-dev libssl-dev libvulkan-dev \
             ffmpeg dpkg-dev
 
-      - name: Resolve version
-        id: version
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-            VERSION="${VERSION}+git.${GITHUB_SHA::7}"
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       - name: Build release binary
         run: cargo build --locked --release
 
@@ -45,7 +71,7 @@ jobs:
         run: |
           bash packaging/linux/build-deb.sh \
             target/release/rumstsc \
-            "${{ steps.version.outputs.version }}" \
+            "${{ needs.meta.outputs.version }}" \
             dist
 
       - name: Upload .deb artifact
@@ -54,19 +80,63 @@ jobs:
           name: deb
           path: dist/*.deb
 
+  build-windows:
+    needs: [meta]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Package Windows zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $name = "rumstsc-${{ needs.meta.outputs.version }}-windows-x64.zip"
+          # '+' is awkward in some downloaders; keep the cargo/deb version elsewhere.
+          $name = $name -replace '\+','-'
+          Compress-Archive -Path target/release/rumstsc.exe -DestinationPath "dist/$name" -Force
+          Get-ChildItem dist
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
   publish:
-    needs: [build-deb]
+    needs: [meta, build-deb, build-windows]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create GitHub Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/deb/*.deb
+          tag_name: ${{ needs.meta.outputs.release_tag }}
+          name: ${{ needs.meta.outputs.release_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          make_latest: ${{ needs.meta.outputs.make_latest }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          body: |
+            Automated build from `${{ github.sha }}`.
+
+            Install via apt:
+            ```sh
+            echo "deb [trusted=yes] https://cattens-roses.github.io/rumstsc ./" \
+              | sudo tee /etc/apt/sources.list.d/rumstsc.list
+            sudo apt update
+            sudo apt install rumstsc
+            ```
+          files: |
+            artifacts/deb/*.deb
+            artifacts/windows/*.zip
 
       - name: Checkout gh-pages
         uses: actions/checkout@v4
@@ -126,6 +196,7 @@ jobs:
           <body>
             <h1>rumstsc — remote desktop client</h1>
             <p>Source: <a href="https://github.com/Cattens-Roses/rumstsc">github.com/Cattens-Roses/rumstsc</a></p>
+            <p>GitHub Releases (auto): <a href="https://github.com/Cattens-Roses/rumstsc/releases">releases</a> — continuous builds on <code>main</code>, stable on <code>v*</code> tags.</p>
 
             <h2>Debian / Ubuntu (apt)</h2>
             <pre>echo "deb [trusted=yes] https://cattens-roses.github.io/rumstsc ./" \
@@ -141,7 +212,6 @@ jobs:
           cd gh-pages
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Ensure push auth works for both fresh and checked-out clones
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" 2>/dev/null || \
             git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git add -A

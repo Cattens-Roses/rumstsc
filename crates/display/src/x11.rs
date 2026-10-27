@@ -290,6 +290,12 @@ fn run_inner(
                     }
                 }
                 Event::MotionNotify(event) => {
+                    shared.hover_controls(
+                        &buffer,
+                        event.event_x as i32,
+                        event.event_y as i32,
+                        keys.buttons,
+                    );
                     keys.mouse(&buffer, event.event_x as i32, event.event_y as i32, 0x800)
                 }
                 Event::ButtonPress(event) => {

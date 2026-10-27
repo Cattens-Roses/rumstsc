@@ -5,6 +5,7 @@ mod input;
 mod keyboard;
 mod settings;
 mod theme;
+mod ui;
 use gpui::{prelude::*, *};
 fn main() {
     let startup_path = settings::Settings::startup_trace_path();
@@ -26,7 +27,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(500.), px(560.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("rumstsc — Remote Desktop".into()),
+                    title: Some("rumstsc - Remote Desktop".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
