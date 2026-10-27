@@ -34,7 +34,9 @@ jobs:
             MAKE_LATEST=true
           else
             BASE="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-            VERSION="${BASE}+git.${GITHUB_SHA::7}"
+            # Use run_number so apt sees a strictly increasing version. Plain
+            # 0.1.0+git.<sha> sorts lexicographically and older SHAs can look newer.
+            VERSION="${BASE}+${GITHUB_RUN_NUMBER}.git.${GITHUB_SHA::7}"
             RELEASE_TAG="continuous"
             RELEASE_NAME="Continuous build (${GITHUB_SHA::7})"
             PRERELEASE=true
@@ -164,8 +166,13 @@ jobs:
       - name: Publish apt repo
         run: |
           mkdir -p gh-pages/pool/main
+          # Drop legacy 0.1.0+git.<sha> packages that confuse apt ordering, then
+          # keep only the newest few builds so upgrades stay obvious.
+          rm -f gh-pages/pool/main/rumstsc_0.1.0+git.*.deb
           cp artifacts/deb/*.deb gh-pages/pool/main/
-          cd gh-pages
+          cd gh-pages/pool/main
+          ls -1 rumstsc_*.deb 2>/dev/null | sort -V | head -n -5 | xargs -r rm -f
+          cd ../..
           dpkg-scanpackages --multiversion pool/ > Packages
           gzip -k -f Packages
           cat > Release <<EOF
