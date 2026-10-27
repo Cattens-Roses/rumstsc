@@ -369,7 +369,7 @@ fn make_cursor(
         _ => (1, 1, 0, 0, vec![0; 4]),
     };
     // XRender uses premultiplied ARGB32 (BGRA bytes on this little-endian visual).
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         for c in 0..3 {
             pixel[c] = (pixel[c] as u16 * pixel[3] as u16 / 255) as u8;
         }
