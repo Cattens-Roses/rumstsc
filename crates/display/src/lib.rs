@@ -2,6 +2,7 @@
 //! coalesces every pending tile, so a busy display cannot lose incremental pixels.
 use rumstsc_rdp::{
     bitmap::{Snapshot, TilePixels},
+    pointer::Pointer,
     session::Input,
 };
 use std::{
@@ -38,6 +39,7 @@ struct Mailbox {
     height: u16,
     tiles: BTreeMap<usize, TilePixels>,
     resize: bool,
+    pointer: Option<Pointer>,
 }
 struct Shared {
     mailbox: Mutex<Mailbox>,
@@ -105,6 +107,10 @@ impl Display {
             handle: Handle(shared),
         })
     }
+    pub fn pointer(&self, pointer: Pointer) {
+        self.handle.0.mailbox.lock().unwrap().pointer = Some(pointer);
+        self.handle.wake();
+    }
     pub fn captured(&self) -> bool {
         self.handle.0.captured.load(Ordering::Acquire)
     }
@@ -169,6 +175,7 @@ struct Buffer {
     height: u16,
     pixels: Vec<u8>,
     bounds: Bounds,
+    pointer: Option<Pointer>,
 }
 impl Buffer {
     fn receive(&mut self, shared: &Shared) -> Result<(), String> {
@@ -176,6 +183,9 @@ impl Buffer {
         let _span = shared.trace.span("native_tile_apply", "native", 0);
         let mut m = shared.mailbox.lock().unwrap();
         self.bounds = m.bounds;
+        if let Some(pointer) = m.pointer.take() {
+            self.pointer = Some(pointer);
+        }
         if m.resize || (self.width, self.height) != (m.width, m.height) {
             self.width = m.width;
             self.height = m.height;
@@ -368,6 +378,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(16);
         let mut keys = Keys::new(tx);
         let buffer = Buffer {
+            pointer: None,
             width: 2,
             height: 1,
             bounds: Bounds {

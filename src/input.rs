@@ -312,7 +312,7 @@ impl Render for TextField {
         div()
             .id("field")
             .w_full()
-            .h(px(40.))
+            .h(px(44.))
             .px_3()
             .flex()
             .items_center()
@@ -325,7 +325,8 @@ impl Render for TextField {
             } else {
                 palette.border
             })
-            .rounded_md()
+            .rounded(px(8.))
+            .hover(|s| s.border_color(palette.accent))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(

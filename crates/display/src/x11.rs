@@ -159,10 +159,21 @@ fn run_inner(
     let mut pixmap = None;
     let mut old_bounds = Bounds::default();
     let mut repaint = true;
+    let mut cursor = None;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         loop {
             if shared.stop.load(Ordering::Acquire) {
                 break;
+            }
+            if let Some(pointer) = buffer.pointer.take() {
+                let next = make_cursor(&connection, window, &pointer)?;
+                connection.change_window_attributes(
+                    window,
+                    &ChangeWindowAttributesAux::new().cursor(next.unwrap_or(0)),
+                )?;
+                if let Some(previous) = cursor.replace(next.unwrap_or(0)).filter(|id| *id != 0) {
+                    connection.free_cursor(previous)?;
+                }
             }
             let bounds = buffer.bounds;
             if bounds != old_bounds {
@@ -294,10 +305,84 @@ fn run_inner(
     if let Some((id, _, _)) = pixmap {
         let _ = connection.free_pixmap(id);
     }
+    if let Some(cursor) = cursor.filter(|id| *id != 0) {
+        let _ = connection.free_cursor(cursor);
+    }
     let _ = connection.free_gc(gc);
     let _ = connection.destroy_window(window);
     let _ = connection.flush();
     result
+}
+// XRender cursors preserve color/alpha and move independently of framebuffer paints.
+fn make_cursor(
+    connection: &RustConnection,
+    window: u32,
+    pointer: &Pointer,
+) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    use x11rb::protocol::render::{ConnectionExt as _, CreatePictureAux, PictType};
+    if matches!(pointer, Pointer::Default) {
+        return Ok(None);
+    }
+    let (width, height, hot_x, hot_y, mut pixels) = match pointer {
+        Pointer::Image(image) => (
+            image.width,
+            image.height,
+            image.hot_x,
+            image.hot_y,
+            image.bgra.clone(),
+        ),
+        _ => (1, 1, 0, 0, vec![0; 4]),
+    };
+    // XRender uses premultiplied ARGB32 (BGRA bytes on this little-endian visual).
+    for pixel in pixels.chunks_exact_mut(4) {
+        for c in 0..3 {
+            pixel[c] = (pixel[c] as u16 * pixel[3] as u16 / 255) as u8;
+        }
+    }
+    let formats = connection.render_query_pict_formats()?.reply()?;
+    let format = formats
+        .formats
+        .iter()
+        .find(|f| {
+            f.type_ == PictType::DIRECT
+                && f.depth == 32
+                && f.direct.red_shift == 16
+                && f.direct.green_shift == 8
+                && f.direct.blue_shift == 0
+                && f.direct.alpha_shift == 24
+                && f.direct.red_mask == 255
+                && f.direct.green_mask == 255
+                && f.direct.blue_mask == 255
+                && f.direct.alpha_mask == 255
+        })
+        .ok_or("XRender ARGB32 cursor format unavailable")?
+        .id;
+    let pixmap = connection.generate_id()?;
+    let gc = connection.generate_id()?;
+    let picture = connection.generate_id()?;
+    let cursor = connection.generate_id()?;
+    connection.create_pixmap(32, pixmap, window, width, height)?;
+    connection.create_gc(gc, pixmap, &CreateGCAux::new())?;
+    connection.put_image(
+        ImageFormat::Z_PIXMAP,
+        pixmap,
+        gc,
+        width,
+        height,
+        0,
+        0,
+        0,
+        32,
+        &pixels,
+    )?;
+    connection.render_create_picture(picture, pixmap, format, &CreatePictureAux::new())?;
+    connection
+        .render_create_cursor(cursor, picture, hot_x, hot_y)?
+        .check()?;
+    connection.render_free_picture(picture)?;
+    connection.free_gc(gc)?;
+    connection.free_pixmap(pixmap)?;
+    Ok(Some(cursor))
 }
 fn paint(
     connection: &RustConnection,
@@ -365,6 +450,33 @@ fn paint(
 mod tests {
     use super::*;
     use x11rb::wrapper::ConnectionExt as _;
+    #[test]
+    fn xrender_server_cursor_and_hidden_cursor() {
+        if std::env::var_os("DISPLAY").is_none() {
+            return;
+        }
+        let (connection, screen) = RustConnection::connect(None).unwrap();
+        let root = connection.setup().roots[screen].root;
+        let pointer = Pointer::Image(Arc::new(rumstsc_rdp::pointer::PointerImage {
+            width: 2,
+            height: 2,
+            hot_x: 1,
+            hot_y: 0,
+            bgra: vec![
+                0, 0, 0, 255, 255, 255, 255, 255, 20, 40, 60, 128, 0, 0, 0, 0,
+            ],
+            invert: vec![false; 4],
+        }));
+        for pointer in [pointer, Pointer::Hidden] {
+            let cursor = make_cursor(&connection, root, &pointer).unwrap().unwrap();
+            connection.free_cursor(cursor).unwrap().check().unwrap();
+        }
+        assert!(
+            make_cursor(&connection, root, &Pointer::Default)
+                .unwrap()
+                .is_none()
+        );
+    }
     #[test]
     fn native_x11_legacy_title_parent_and_pixels() {
         if std::env::var_os("DISPLAY").is_none() {

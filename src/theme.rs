@@ -22,12 +22,12 @@ impl Theme {
     pub fn palette(self) -> Palette {
         let (bg, panel, field, border, text, muted, accent, soft, error) = match self {
             Self::Dark => (
-                0x111315, 0x191c1f, 0x121517, 0x32383e, 0xe9edf0, 0x9aa5af, 0x86bfff, 0x25384d,
-                0xffa7a7,
+                0x101216, 0x191c22, 0x12151a, 0x303640, 0xedf0f6, 0x9ca6b7, 0xa6b7ff, 0x29334e,
+                0xffa6ad,
             ),
             Self::Light => (
-                0xf3f5f7, 0xffffff, 0xf8fafb, 0xd5dce2, 0x17212b, 0x5b6875, 0x225eaf, 0xe8f0fb,
-                0xa52b38,
+                0xf1f3f8, 0xffffff, 0xf8f9fc, 0xdce1eb, 0x202737, 0x647086, 0x465fca, 0xe9edfc,
+                0xb52e46,
             ),
         };
         Palette {

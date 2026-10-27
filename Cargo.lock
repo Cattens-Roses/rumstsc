@@ -4567,6 +4567,7 @@ dependencies = [
 name = "rumstsc"
 version = "0.1.0"
 dependencies = [
+ "embed-resource",
  "gpui",
  "image",
  "raw-window-handle",

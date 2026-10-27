@@ -41,6 +41,7 @@ pub enum Event {
     Status(String),
     Security(String),
     Graphics(&'static str),
+    Pointer(crate::pointer::Pointer),
     CertificateReview(CertificateReview),
     Active,
     Error(String),
@@ -341,7 +342,7 @@ fn confirm_active_depth(user: u16, share_id: u32, width: u16, height: u16, depth
     cap(&mut caps, 4, &bitmap_cache);
     cap(&mut caps, 5, &[0; 8]);
     cap(&mut caps, 7, &[0; 8]);
-    cap(&mut caps, 8, &[0, 0, 0, 0, 0, 0]); // No color pointer cache.
+    cap(&mut caps, 8, &[1, 0, 25, 0, 25, 0]); // Color and arbitrary-depth pointer caches.
     cap(&mut caps, 9, &[0; 4]);
     cap(&mut caps, 10, &[0; 4]);
     let mut input = vec![0; 84];
@@ -576,6 +577,7 @@ fn run(
     );
     stream.set_nonblocking(true)?;
     let mut bulk = crate::bulk::Bulk::default();
+    let mut pointers = crate::pointer::Decoder::default();
     let mut dvc = crate::dvc::Dvc::default();
     let mut autodetect = crate::autodetect::AutoDetect::default();
     let mut graphics_label = "";
@@ -908,6 +910,12 @@ fn run(
                                         }
                                     }
                                 }
+                                27 => {
+                                    if let Some(pointer) = pointers.update(p.rest())? {
+                                        trace.mark("pointer_update", "network", 1);
+                                        let _ = tx.send(Event::Pointer(pointer));
+                                    }
+                                }
                                 40 => {
                                     if !active {
                                         active = true;
@@ -923,7 +931,7 @@ fn run(
                                         )));
                                     }
                                 }
-                                20 | 27 | 31 | 38 | 54 | 55 => {}
+                                20 | 31 | 38 | 54 | 55 => {}
                                 _ => {}
                             }
                         }
@@ -1021,6 +1029,9 @@ mod tests {
             let kind = r.u16().unwrap();
             let n = r.u16().unwrap() as usize;
             let capability = r.take(n - 4).unwrap();
+            if kind == 8 {
+                assert_eq!(capability, [1, 0, 25, 0, 25, 0]);
+            }
             if kind == 20 {
                 assert_eq!(capability, [0, 0, 0, 0, 0x40, 6, 0, 0]);
             }

@@ -1,0 +1,2 @@
+// GPUI loads the main window/taskbar icon from resource 1.
+1 ICON "assets/rumstsc.ico"

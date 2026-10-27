@@ -19,6 +19,7 @@ mod nsc;
 pub mod ntlm;
 pub mod orders;
 mod planar;
+pub mod pointer;
 mod progressive;
 pub mod rle;
 pub mod session;

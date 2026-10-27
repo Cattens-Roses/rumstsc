@@ -55,6 +55,8 @@ pub struct Client {
     held: BTreeSet<(u16, bool)>,
     modifiers: Modifiers,
     mouse: u16,
+    remote_pointer: rumstsc_rdp::pointer::Pointer,
+    pointer_image: Option<Arc<RenderImage>>,
     _subscriptions: Vec<Subscription>,
 }
 impl Client {
@@ -150,6 +152,8 @@ impl Client {
             held: BTreeSet::new(),
             modifiers: Modifiers::default(),
             mouse: 0,
+            remote_pointer: Default::default(),
+            pointer_image: None,
             _subscriptions: vec![blur, activation],
         }
     }
@@ -220,6 +224,8 @@ impl Client {
         match Connection::start_interactive_traced(options, Settings::trace_path()) {
             Ok(connection) => {
                 self.password.update(cx, |f, cx| f.set(String::new(), cx));
+                self.remote_pointer = Default::default();
+                self.pointer_image = None;
                 self.connection = Some(connection);
                 self.error = None;
                 self.certificate_review = None;
@@ -265,6 +271,21 @@ impl Client {
                 }
                 Event::Security(label) => self.session_security = label,
                 Event::Graphics(label) => self.graphics_mode = label.into(),
+                Event::Pointer(pointer) => {
+                    self.pointer_image = match &pointer {
+                        rumstsc_rdp::pointer::Pointer::Image(image) => image::RgbaImage::from_raw(
+                            image.width.into(),
+                            image.height.into(),
+                            image.bgra.clone(),
+                        )
+                        .map(|pixels| Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))),
+                        _ => None,
+                    };
+                    if let Some(display) = &self.native {
+                        display.pointer(pointer.clone());
+                    }
+                    self.remote_pointer = pointer;
+                }
                 Event::Status(s) => {
                     self.status = s;
                     if self.active {
@@ -281,7 +302,10 @@ impl Client {
                             self.connection.as_ref().unwrap().input_sender(),
                             self.connection.as_ref().unwrap().trace.clone(),
                         ) {
-                            Ok(display) => self.native = Some(display),
+                            Ok(display) => {
+                                display.pointer(self.remote_pointer.clone());
+                                self.native = Some(display);
+                            }
                             Err(error) => self.error = Some(error),
                         }
                     }
@@ -413,6 +437,8 @@ impl Client {
         self.release_input();
         self.poll_task = None;
         self.native = None;
+        self.remote_pointer = Default::default();
+        self.pointer_image = None;
         self.connection = None;
         self.certificate_review = None;
         self.active = false;
@@ -522,47 +548,57 @@ impl Client {
         let mut card = div()
             .w_full()
             .flex_shrink_0()
-            .max_w(px(440.))
+            .max_w(px(480.))
             .flex()
             .flex_col()
-            .gap_5()
+            .gap_4()
             .p_6()
             .bg(p.panel)
             .border_1()
             .border_color(p.border)
-            .rounded_lg()
+            .rounded(px(16.))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_2()
+                    .child(desktop_mark(p.accent, p.soft, 40.))
                     .child(
                         div()
-                            .text_size(px(22.))
+                            .mt_2()
+                            .text_xs()
+                            .text_color(p.accent)
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Remote Desktop Connection"),
+                            .child("YOUR WORKSPACE, ANYWHERE"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(28.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Connect to a desktop"),
                     )
                     .child(
                         div()
                             .text_sm()
                             .text_color(p.muted)
-                            .child("A small window to another computer."),
+                            .child("Your remote computer. One simple connection."),
                     ),
             );
         if !busy {
             card = card
+                .child(div().h(px(1.)).bg(p.border))
                 .child(field("Computer", self.host.clone(), p.muted))
                 .child(field("User name", self.user.clone(), p.muted))
                 .child(field("Password", self.password.clone(), p.muted))
                 .when(!self.settings.recent.is_empty(), |d| {
                     d.child(
-                        div().flex().gap_2().flex_wrap().children(
-                            self.settings
-                                .recent
-                                .iter()
-                                .take(3)
-                                .enumerate()
-                                .map(|(i, h)| {
+                        div()
+                            .flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(div().py_1().text_xs().text_color(p.muted).child("Recent"))
+                            .children(self.settings.recent.iter().take(3).enumerate().map(
+                                |(i, h)| {
                                     let host = h.clone();
                                     div()
                                         .id(("recent", i))
@@ -572,25 +608,33 @@ impl Client {
                                         .text_xs()
                                         .text_color(p.muted)
                                         .bg(p.field)
+                                        .hover(|s| s.bg(p.soft).text_color(p.accent))
                                         .cursor_pointer()
                                         .child(h.clone())
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.host.update(cx, |f, cx| f.set(host.clone(), cx))
                                         }))
-                                }),
-                        ),
+                                },
+                            )),
                     )
                 })
                 .child(
                     div()
                         .id("options")
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(p.border)
+                        .hover(|s| s.text_color(p.text))
                         .text_sm()
                         .text_color(p.accent)
                         .cursor_pointer()
                         .child(if self.advanced {
-                            "− Hide options"
+                            "Advanced options   −"
                         } else {
-                            "+ Show options"
+                            "Advanced options   +"
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.advanced = !this.advanced;
@@ -603,6 +647,9 @@ impl Client {
                             .flex()
                             .flex_col()
                             .gap_4()
+                            .p_4()
+                            .bg(p.field)
+                            .rounded(px(10.))
                             .child(field("Domain", self.domain.clone(), p.muted))
                             .child(
                                 div().flex().flex_wrap().gap_2().children(
@@ -622,6 +669,17 @@ impl Client {
                                                 .py_1()
                                                 .rounded_md()
                                                 .border_1()
+                                                .bg(if self.security_mode == mode {
+                                                    p.soft
+                                                } else {
+                                                    p.panel
+                                                })
+                                                .text_color(if self.security_mode == mode {
+                                                    p.accent
+                                                } else {
+                                                    p.muted
+                                                })
+                                                .hover(|s| s.bg(p.soft))
                                                 .border_color(if self.security_mode == mode {
                                                     p.accent
                                                 } else {
@@ -683,6 +741,17 @@ impl Client {
                                                 .text_xs()
                                                 .rounded_md()
                                                 .border_1()
+                                                .bg(if self.settings.resolution == i {
+                                                    p.soft
+                                                } else {
+                                                    p.panel
+                                                })
+                                                .text_color(if self.settings.resolution == i {
+                                                    p.accent
+                                                } else {
+                                                    p.muted
+                                                })
+                                                .hover(|s| s.bg(p.soft))
                                                 .border_color(if self.settings.resolution == i {
                                                     p.accent
                                                 } else {
@@ -717,7 +786,17 @@ impl Client {
                 });
         }
         if let Some(error) = &self.error {
-            card = card.child(div().text_sm().text_color(p.error).child(error.clone()));
+            card = card.child(
+                div()
+                    .p_3()
+                    .rounded(px(8.))
+                    .bg(p.field)
+                    .border_1()
+                    .border_color(p.error)
+                    .text_sm()
+                    .text_color(p.error)
+                    .child(error.clone()),
+            );
         }
         if let Some(certificate) = &self.certificate_review {
             let fingerprint = certificate.fingerprint.clone();
@@ -763,8 +842,8 @@ impl Client {
         } else {
             rgb(0xffffff).into()
         };
-        card=card.child(div().id("connect").h(px(42.)).flex().items_center().justify_center().rounded_md().bg(if busy{p.soft}else{p.accent}).text_color(button_text).font_weight(FontWeight::SEMIBOLD).cursor_pointer().child(if busy{"Cancel"}else{"Connect"}).on_click(cx.listener(|this,_,window,cx|{if this.connection.is_some(){this.disconnect(window, cx);}else{this.connect(window,cx);}})))
-            .child(div().text_xs().text_color(p.muted).child("TLS verifies system trust or an explicit certificate pin. Passwords are never saved. Legacy encryption requires a pin."));
+        card=card.child(div().id("connect").h(px(46.)).flex().items_center().justify_center().rounded(px(8.)).bg(if busy{p.soft}else{p.accent}).text_color(button_text).font_weight(FontWeight::SEMIBOLD).cursor_pointer().hover(|s| s.opacity(0.88)).child(if busy{"Cancel connection"}else{"Connect to desktop  →"}).on_click(cx.listener(|this,_,window,cx|{if this.connection.is_some(){this.disconnect(window, cx);}else{this.connect(window,cx);}})))
+            .child(div().text_xs().text_color(p.muted).child("Passwords are never saved. Server identity is verified with system trust or your certificate pin. Legacy connections require a pin."));
         div()
             .flex_1()
             .min_h_0()
@@ -814,8 +893,18 @@ impl Client {
         let (width, height) = self.desktop;
         let entity = cx.entity();
         let has_image = !tiles.is_empty();
+        let pointer_image = self.pointer_image.clone();
+        let remote_pointer = self.remote_pointer.clone();
         let mut desktop = div()
             .id("desktop")
+            .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
+            .cursor(
+                if matches!(self.remote_pointer, rumstsc_rdp::pointer::Pointer::Default) {
+                    CursorStyle::Arrow
+                } else {
+                    CursorStyle::None
+                },
+            )
             .flex_1()
             .min_h_0()
             .w_full()
@@ -846,9 +935,12 @@ impl Client {
                     this.pointer(e.position, 0xc000);
                 }),
             )
-            .on_mouse_move(
-                cx.listener(|this, e: &MouseMoveEvent, _, _| this.pointer(e.position, 0x0800)),
-            );
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                this.pointer(e.position, 0x0800);
+                if this.pointer_image.is_some() {
+                    cx.notify();
+                }
+            }));
         for (button, flag) in [
             (MouseButton::Left, 0x1000),
             (MouseButton::Right, 0x2000),
@@ -923,6 +1015,27 @@ impl Client {
                                 false,
                             );
                         }
+                        if let (rumstsc_rdp::pointer::Pointer::Image(pointer), Some(image)) =
+                            (&remote_pointer, &pointer_image)
+                        {
+                            let position = window.mouse_position();
+                            if bounds.contains(&position) {
+                                let cursor_bounds = Bounds::new(
+                                    point(
+                                        position.x - px(pointer.hot_x as f32),
+                                        position.y - px(pointer.hot_y as f32),
+                                    ),
+                                    size(px(pointer.width as f32), px(pointer.height as f32)),
+                                );
+                                let _ = window.paint_image(
+                                    cursor_bounds,
+                                    Corners::default(),
+                                    image.clone(),
+                                    0,
+                                    false,
+                                );
+                            }
+                        }
                         if has_tiles
                             && !first_paint.swap(true, Ordering::Relaxed)
                             && let Some(trace) = &trace
@@ -948,12 +1061,34 @@ impl Client {
         desktop.into_any_element()
     }
 }
+fn desktop_mark(ink: Hsla, background: Hsla, size: f32) -> impl IntoElement {
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(size * 0.25))
+        .bg(background)
+        .child(
+            svg()
+                .path("rdpicon.svg")
+                .size(px(size * 0.8))
+                .text_color(ink),
+        )
+}
 fn field(label: &'static str, input: Entity<TextField>, muted: Hsla) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().text_sm().text_color(muted).child(label))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(muted)
+                .child(label),
+        )
         .child(input)
 }
 impl Render for Client {
@@ -997,7 +1132,7 @@ impl Render for Client {
             )
             .child(
                 div()
-                    .h(px(58.))
+                    .h(px(64.))
                     .flex_shrink_0()
                     .px_5()
                     .flex()
@@ -1010,7 +1145,7 @@ impl Render for Client {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().text_color(p.accent).text_size(px(24.)).child("▣"))
+                            .child(desktop_mark(p.accent, p.soft, 30.))
                             .child(div().font_weight(FontWeight::SEMIBOLD).child("rumstsc")),
                     )
                     .child(
@@ -1033,6 +1168,11 @@ impl Render for Client {
                             .child(
                                 div()
                                     .id("theme")
+                                    .h(px(32.))
+                                    .flex()
+                                    .items_center()
+                                    .bg(p.panel)
+                                    .hover(|s| s.bg(p.soft))
                                     .px_3()
                                     .py_1()
                                     .rounded_md()
@@ -1040,9 +1180,9 @@ impl Render for Client {
                                     .border_color(p.border)
                                     .cursor_pointer()
                                     .child(if self.settings.theme == Theme::Dark {
-                                        "Light"
+                                        "Light theme"
                                     } else {
-                                        "Dark"
+                                        "Dark theme"
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
                             ),
@@ -1088,7 +1228,7 @@ impl Render for Client {
                     .child(if active {
                         "Ctrl+Alt+Home releases input"
                     } else {
-                        "Rust + GPUI"
+                        "Remote desktop"
                     }),
             )
     }

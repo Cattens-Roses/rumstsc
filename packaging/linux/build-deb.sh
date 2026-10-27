@@ -22,6 +22,10 @@ mkdir -p "$output" \
 
 install -m 0755 "$binary" "$debroot/usr/bin/rumstsc"
 install -m 0644 "$repo_root/assets/rumstsc.desktop" "$debroot/usr/share/applications/rumstsc.desktop"
+install -Dm 0644 "$repo_root/assets/rumstsc.svg" "$debroot/usr/share/icons/hicolor/scalable/apps/rumstsc.svg"
+for size in 16 24 32 48 64 128 256 512; do
+  install -Dm 0644 "$repo_root/assets/icons/${size}x${size}/rumstsc.png" "$debroot/usr/share/icons/hicolor/${size}x${size}/apps/rumstsc.png"
+done
 install -m 0644 "$repo_root/LICENSE" "$debroot/usr/share/doc/rumstsc/copyright"
 install -m 0644 "$repo_root/README.md" "$debroot/usr/share/doc/rumstsc/README.md"
 
@@ -42,6 +46,9 @@ cat > "$debroot/DEBIAN/postinst" <<'EOF'
 set -e
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q /usr/share/applications || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
 fi
 exit 0
 EOF

@@ -316,6 +316,17 @@ fn activation_bitmap_and_input(compression: Option<u8>) {
         }
         bitmap.extend([1, 2, 3, 0]);
         let mut output = indication(&data(40, &[0; 8]));
+        // Pointer updates are Share Data PDUs, independent of desktop pixels.
+        let mut pointer: Vec<u8> = [6u16, 0, 3, 0, 0, 1, 1, 2, 4]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        pointer.extend([0, 0, 0, 0, 0, 0]);
+        output.extend(indication(&data(27, &pointer)));
+        output.extend(indication(&data(27, &[7, 0, 0, 0, 3, 0])));
+        output.extend(indication(&data(27, &[1, 0, 0, 0, 0, 0, 0, 0])));
+        output.extend(indication(&data(27, &[1, 0, 0, 0, 0, 0x7f, 0, 0])));
+
         // Frame START precedes a bitmap in another PDU; the graphics worker
         // must keep it off the UI until the matching END after the screen copy.
         output.extend(indication(&data(
@@ -392,6 +403,18 @@ fn activation_bitmap_and_input(compression: Option<u8>) {
         }
     }
     assert!(active);
+    for expected in 0..4 {
+        let event = c.events.recv_timeout(Duration::from_secs(5)).unwrap();
+        match (expected, event) {
+            (0 | 1, Event::Pointer(rumstsc_rdp::pointer::Pointer::Image(image))) => {
+                assert_eq!((image.width, image.height), (1, 1));
+                assert_eq!(image.bgra, [0, 0, 0, 255]);
+            }
+            (2, Event::Pointer(rumstsc_rdp::pointer::Pointer::Hidden)) => {}
+            (3, Event::Pointer(rumstsc_rdp::pointer::Pointer::Default)) => {}
+            (_, event) => panic!("unexpected pointer event: {event:?}"),
+        }
+    }
     let deadline = Instant::now() + Duration::from_secs(2);
     while c.frame.lock().unwrap().revision < if compression.is_some() { 3 } else { 2 } {
         assert!(Instant::now() < deadline);

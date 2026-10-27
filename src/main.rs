@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod app;
+mod assets;
 mod input;
 mod keyboard;
 mod settings;
@@ -14,12 +15,12 @@ fn main() {
     }
     let app = {
         let _span = startup_trace.span("gpui_init", "ui", 0);
-        Application::new()
+        Application::new().with_assets(assets::Assets)
     };
     app.run(move |cx: &mut App| {
         let _span = startup_trace.span("window_open", "ui", 0);
         let window_trace = startup_trace.clone();
-        let bounds = Bounds::centered(None, size(px(600.), px(800.)), cx);
+        let bounds = Bounds::centered(None, size(px(640.), px(840.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -31,6 +32,7 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
+                window.set_app_id("rumstsc");
                 let client = cx.new(|cx| app::Client::new(window, cx, window_trace.clone()));
                 client.read(cx).host.read(cx).focus.focus(window);
                 client

@@ -15,6 +15,8 @@ struct State {
     keys: Keys,
     parent: HWND,
     last_bounds: Bounds,
+    cursor: Option<HCURSOR>,
+    cursor_hidden: bool,
 }
 pub(super) fn run(
     shared: Arc<Shared>,
@@ -46,6 +48,8 @@ unsafe fn run_inner(
             keys: Keys::new(input),
             parent,
             last_bounds: Bounds::default(),
+            cursor: None,
+            cursor_hidden: false,
         });
         let window = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -111,6 +115,28 @@ unsafe extern "system" fn procedure(
                     let _ = DestroyWindow(window);
                     return LRESULT(0);
                 }
+                if let Some(pointer) = state.buffer.pointer.take() {
+                    match make_cursor(&pointer) {
+                        Ok(cursor) => {
+                            let previous = std::mem::replace(&mut state.cursor, cursor);
+                            state.cursor_hidden = matches!(pointer, Pointer::Hidden);
+                            let mut position = POINT::default();
+                            if GetCursorPos(&mut position).is_ok()
+                                && WindowFromPoint(position) == window
+                            {
+                                SetCursor(if state.cursor_hidden {
+                                    None
+                                } else {
+                                    state.cursor.or_else(|| LoadCursorW(None, IDC_ARROW).ok())
+                                });
+                            }
+                            if let Some(previous) = previous.filter(|c| !c.0.is_null()) {
+                                let _ = DestroyCursor(previous);
+                            }
+                        }
+                        Err(error) => *state.shared.error.lock().unwrap() = Some(error.to_string()),
+                    }
+                }
                 let b = state.buffer.bounds;
                 if state.last_bounds != b {
                     let _ = SetWindowPos(
@@ -132,6 +158,14 @@ unsafe extern "system" fn procedure(
                 }
                 let _ = InvalidateRect(Some(window), None, false);
                 LRESULT(0)
+            }
+            WM_SETCURSOR if lparam.0 as u16 == HTCLIENT as u16 => {
+                SetCursor(if state.cursor_hidden {
+                    None
+                } else {
+                    state.cursor.or_else(|| LoadCursorW(None, IDC_ARROW).ok())
+                });
+                LRESULT(1)
             }
             WM_PAINT => {
                 let _span = state.shared.trace.span(
@@ -222,11 +256,107 @@ unsafe extern "system" fn procedure(
                 LRESULT(0)
             }
             WM_DESTROY => {
+                if let Some(cursor) = state.cursor.take() {
+                    let _ = DestroyCursor(cursor);
+                }
                 PostQuitMessage(0);
                 LRESULT(0)
             }
             _ => DefWindowProcW(window, message, wparam, lparam),
         }
+    }
+}
+
+unsafe fn make_cursor(pointer: &Pointer) -> windows::core::Result<Option<HCURSOR>> {
+    let Pointer::Image(image) = pointer else {
+        return Ok(None);
+    };
+    unsafe {
+        let width = image.width as usize;
+        let height = image.height as usize;
+        let stride = width.div_ceil(16) * 2;
+        let mut mask = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                if image.bgra[(y * width + x) * 4 + 3] == 0 || image.invert[y * width + x] {
+                    mask[y * stride + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        // Windows' monochrome cursor format preserves screen inversion, used
+        // by classic text carets and some resize arrows: AND rows, then XOR.
+        if image.invert.iter().any(|p| *p) {
+            let mut mono = mask.clone();
+            mono.resize(stride * height * 2, 0);
+            for y in 0..height {
+                for x in 0..width {
+                    let pixel = &image.bgra[(y * width + x) * 4..][..4];
+                    if pixel[3] != 0 && pixel[..3].iter().map(|v| *v as u16).sum::<u16>() >= 384 {
+                        mono[stride * height + y * stride + x / 8] |= 0x80 >> (x % 8);
+                    }
+                }
+            }
+            let bitmap = CreateBitmap(
+                width as i32,
+                (height * 2) as i32,
+                1,
+                1,
+                Some(mono.as_ptr().cast()),
+            );
+            if bitmap.is_invalid() {
+                return Err(windows::core::Error::from_win32());
+            }
+            let result = CreateIconIndirect(&ICONINFO {
+                fIcon: false.into(),
+                xHotspot: image.hot_x.into(),
+                yHotspot: image.hot_y.into(),
+                hbmMask: bitmap,
+                ..Default::default()
+            });
+            let _ = DeleteObject(bitmap.into());
+            return result.map(|icon| Some(HCURSOR(icon.0)));
+        }
+        let mask_bitmap = CreateBitmap(
+            width as i32,
+            height as i32,
+            1,
+            1,
+            Some(mask.as_ptr().cast()),
+        );
+        if mask_bitmap.is_invalid() {
+            return Err(windows::core::Error::from_win32());
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        let color = match CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(color) => color,
+            Err(error) => {
+                let _ = DeleteObject(mask_bitmap.into());
+                return Err(error);
+            }
+        };
+        std::ptr::copy_nonoverlapping(image.bgra.as_ptr(), bits.cast(), image.bgra.len());
+        let result = CreateIconIndirect(&ICONINFO {
+            fIcon: false.into(),
+            xHotspot: image.hot_x.into(),
+            yHotspot: image.hot_y.into(),
+            hbmMask: mask_bitmap,
+            hbmColor: color,
+        });
+        let _ = DeleteObject(mask_bitmap.into());
+        let _ = DeleteObject(color.into());
+        result.map(|icon| Some(HCURSOR(icon.0)))
     }
 }
 
@@ -305,6 +435,33 @@ unsafe fn paint_frame(dc: HDC, client: &RECT, buffer: &Buffer) {
 mod tests {
     use super::*;
     #[test]
+    fn server_cursor_resource_preserves_hotspot() {
+        unsafe {
+            for invert in [false, true] {
+                let pointer = Pointer::Image(Arc::new(rumstsc_rdp::pointer::PointerImage {
+                    width: 2,
+                    height: 2,
+                    hot_x: 1,
+                    hot_y: 0,
+                    bgra: vec![255; 16],
+                    invert: vec![invert; 4],
+                }));
+                let cursor = make_cursor(&pointer).unwrap().unwrap();
+                let mut info = ICONINFO::default();
+                GetIconInfo(HICON(cursor.0), &mut info).unwrap();
+                assert!(!info.fIcon.as_bool());
+                assert_eq!((info.xHotspot, info.yHotspot), (1, 0));
+                let _ = DeleteObject(info.hbmMask.into());
+                if !info.hbmColor.is_invalid() {
+                    let _ = DeleteObject(info.hbmColor.into());
+                }
+                DestroyCursor(cursor).unwrap();
+            }
+            assert!(make_cursor(&Pointer::Default).unwrap().is_none());
+            assert!(make_cursor(&Pointer::Hidden).unwrap().is_none());
+        }
+    }
+    #[test]
     fn gdi_paints_bgra_without_a_visible_window() {
         unsafe {
             let dc = CreateCompatibleDC(None);
@@ -326,6 +483,7 @@ mod tests {
                 CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut pixels, None, 0).unwrap();
             let old = SelectObject(dc, bitmap.into());
             let buffer = Buffer {
+                pointer: None,
                 width: 2,
                 height: 1,
                 pixels: vec![10, 20, 30, 255, 40, 50, 60, 255],
