@@ -85,7 +85,7 @@ impl Decoder {
                 let and = r.take(and_len)?;
                 let mut bgra = vec![0; w * h * 4];
                 let mut invert = vec![false; w * h];
-                let alpha = bpp == 32 && xor.chunks_exact(4).any(|p| p[3] != 0);
+                let alpha = bpp == 32 && xor.as_chunks::<4>().0.iter().any(|p| p[3] != 0);
                 for y in 0..h {
                     for x in 0..w {
                         let row = (h - 1 - y) * xor_stride;

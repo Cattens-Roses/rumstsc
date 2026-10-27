@@ -101,8 +101,10 @@ pub(super) fn set_application_icon(
         .reply()?
         .atom;
     let pixels: Vec<u32> = argb
-        .chunks_exact(4)
-        .map(|pixel| u32::from_le_bytes(pixel.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| u32::from_le_bytes(*pixel))
         .collect();
     connection
         .change_property32(
