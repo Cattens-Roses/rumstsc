@@ -1,0 +1,24 @@
+Origin: rumstsc
+Label: rumstsc
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: rumstsc apt repository
+Date: Tue, 27 Oct 2026 18:58:47 +0000
+MD5Sum:
+ 7090b8e2b272a9d4384482bdc845938e              778 Packages
+ 9946acc10e601ba58bc2b7a7f476d108              499 Packages.gz
+ ec68aa5c2dd5a0a39b22dc79a1132012              174 Release
+SHA1:
+ 298cee9d2e7cdf4ebb6ff4db93a4e51f3f7a970e              778 Packages
+ 391300915ad015bf95bf21db1080dfeb28ef0254              499 Packages.gz
+ 5b1eb421fc9f7a7791a2651ca85a28763349e859              174 Release
+SHA256:
+ bb5d44332d1c21e18f8e2ea520d8b2bb9f6984a03d92feecd8ce73a3e51f8731              778 Packages
+ 926aa7f8d5ef2b62d1a847014417cec117c78ad5db1465bb71c1072e055bf0e1              499 Packages.gz
+ 561e2a11ebe6c35b6e35ada2d47309683ece2e3e5a1c9bc7c85bf6290e8e207a              174 Release
+SHA512:
+ 07900935ba115fb298d6a9427dedb264a68d06fab59745c6f5bc2514373fbd2bd40ef84134b6985bc4ab483eea577660660afafc84e8338dd625b471cc7ffe11              778 Packages
+ 06b2b8ad4085eb3aa7684cefeecd3720b337704fc598ab4067303219717ee176b2fe1d65f2278f627dd21cf0958230f2440867ac1b62806c1c0d78c88f432ef9              499 Packages.gz
+ 73869815399cc1ae96e46a5850344b631f1e62c78957f1d91db6787701fc832ebb5022038b3731dad97d8a5da3a08708454c1b0de76d2853aa1d4aab35e99694              174 Release
