@@ -439,8 +439,7 @@ fn cancellation_interrupts_a_blocked_handshake() {
                 let mut b = [0];
                 assert_eq!(s.read(&mut b).unwrap(), 0);
             }
-            Err(rumstsc_rdp::Error::Io(e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            Err(rumstsc_rdp::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
             Err(e) => panic!("expected TPKT or cancel EOF, got {e}"),
         }
     });
