@@ -17,6 +17,11 @@ use std::{
 mod win;
 #[cfg(target_os = "linux")]
 mod x11;
+/// Sets the main X11 window icon even when running without an installed desktop entry.
+#[cfg(target_os = "linux")]
+pub fn set_application_icon(pid: u32, argb: &[u8]) -> Result<(), String> {
+    x11::set_application_icon(pid, argb).map_err(|error| error.to_string())
+}
 #[derive(Clone, Copy)]
 pub enum Parent {
     Windows(isize),

@@ -1,5 +1,7 @@
 # rumstsc
 
+<img src="assets/rumstsc.svg" width="64" height="64" alt="rumstsc icon">
+
 A compact native Rust + GPUI remote desktop application, designed for Linux and inspired by Windows Remote Desktop Connection. Dark and light palettes, a connection form, recent hosts, desktop size presets, and a scaled remote framebuffer. No webview, Electron, FreeRDP, rdesktop, IronRDP, or external RDP process.
 
 **This is an experimental RDP client, not a complete MSTSC replacement.** It supports verified TLS 1.2/1.3, NLA using CredSSP v5/v6 and NTLMv2, pinned legacy RSA/RC4 security, classic compressed bitmap graphics, bitmap caching, and an RDPGFX 8.1/AVC420 path. Linux and real xrdp login-screen interoperability have been tested. NLA is covered by protocol vectors and a TLS/CredSSP peer test; authentication against a real Windows server remains unverified.
@@ -196,3 +198,7 @@ The corrected GPUI application was also visually checked against the same remote
 ### Remote pointer shapes
 
 Slow-path system, color, new and cached pointer updates are decoded with a bounded 25-entry cache and validated masks/hotspots. The desktop uses the server-provided cursor, including window resize arrows and text carets. Native Windows and X11/XRender displays use OS cursor resources so movement does not repaint the framebuffer; GPUI draws the cursor separately from cached desktop tiles. Screen-XOR pixels use opaque color when the rendering API cannot express inversion. Large pointers and server-driven pointer repositioning are not advertised.
+
+### Application icon
+
+`rdpicon.svg` is the icon source, embedded directly in GPUI and tinted for either theme. Run `cargo run --locked --manifest-path scripts/icon-export/Cargo.toml` to regenerate the launcher SVG, transparent PNG sizes (16–512 px), multi-resolution Windows ICO, and X11 ARGB property data. Generated assets are committed so normal builds do not need the exporter. Windows embeds resource 1 for Explorer, the title bar and taskbar; Linux packages install the hicolor icons and desktop entry with matching application ID.

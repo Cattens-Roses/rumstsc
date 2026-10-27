@@ -89,6 +89,33 @@ fn find_parent(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
     }
     Ok(found[0])
 }
+pub(super) fn set_application_icon(
+    pid: u32,
+    argb: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use x11rb::wrapper::ConnectionExt as _;
+    let window = find_parent(pid)?;
+    let (connection, _) = RustConnection::connect(None)?;
+    let property = connection
+        .intern_atom(false, b"_NET_WM_ICON")?
+        .reply()?
+        .atom;
+    let pixels: Vec<u32> = argb
+        .chunks_exact(4)
+        .map(|pixel| u32::from_le_bytes(pixel.try_into().unwrap()))
+        .collect();
+    connection
+        .change_property32(
+            PropMode::REPLACE,
+            window,
+            property,
+            AtomEnum::CARDINAL,
+            &pixels,
+        )?
+        .check()?;
+    connection.flush()?;
+    Ok(())
+}
 pub(super) fn run(
     shared: Arc<Shared>,
     parent: u32,

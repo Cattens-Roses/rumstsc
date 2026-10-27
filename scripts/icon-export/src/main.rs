@@ -20,6 +20,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             ),
             &mut pixmap.as_mut(),
         );
+        if size == 64 {
+            let mut net_wm_icon = Vec::new();
+            net_wm_icon.extend(size.to_le_bytes());
+            net_wm_icon.extend(size.to_le_bytes());
+            for pixel in pixmap.pixels() {
+                let p = pixel.demultiply();
+                let argb = ((p.alpha() as u32) << 24)
+                    | ((p.red() as u32) << 16)
+                    | ((p.green() as u32) << 8)
+                    | p.blue() as u32;
+                net_wm_icon.extend(argb.to_le_bytes());
+            }
+            fs::write(root.join("assets/rumstsc.argb"), net_wm_icon)?;
+        }
         let png = pixmap.encode_png()?;
         fs::write(
             root.join(format!("assets/icons/{size}x{size}/rumstsc.png")),

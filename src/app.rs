@@ -81,6 +81,15 @@ impl Client {
         #[cfg(target_os = "linux")]
         let native_parent = std::env::var_os("DISPLAY")
             .map(|_| rumstsc_display::Parent::X11Process(std::process::id()));
+        #[cfg(target_os = "linux")]
+        if native_parent.is_some()
+            && let Err(error) = rumstsc_display::set_application_icon(
+                std::process::id(),
+                include_bytes!("../assets/rumstsc.argb"),
+            )
+        {
+            eprintln!("Unable to set X11 application icon: {error}");
+        }
         #[cfg(not(any(windows, target_os = "linux")))]
         let native_parent = None;
         let theme = settings.theme;
