@@ -1,0 +1,39 @@
+[package]
+name = "rumstsc"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A minimal GPUI remote desktop client with an independent Rust RDP engine"
+default-run = "rumstsc"
+
+[workspace]
+members = ["crates/rdp", "crates/video", "crates/display"]
+resolver = "3"
+
+[features]
+default = ["gui"]
+gui = ["dep:gpui", "dep:image", "dep:rumstsc-display", "dep:raw-window-handle"]
+
+[dependencies]
+rumstsc-rdp = { path = "crates/rdp" }
+rumstsc-display = { path = "crates/display", optional = true }
+raw-window-handle = { version = "0.6.2", optional = true }
+gpui = { version = "=0.2.2", optional = true }
+# GPUI's existing pixel-buffer type; no codecs or RDP implementation enabled.
+image = { version = "0.25", default-features = false, optional = true }
+zeroize = "1.8"
+
+[[bin]]
+name = "rumstsc"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "rumstsc-probe"
+path = "src/probe.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

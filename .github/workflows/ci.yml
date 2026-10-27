@@ -1,0 +1,44 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cargo test --locked -p rumstsc-rdp -p rumstsc-video -p rumstsc-display
+      - run: cargo clippy --locked -p rumstsc-rdp -p rumstsc-video -p rumstsc-display --all-targets -- -D warnings
+      - run: cargo check --locked --no-default-features --bin rumstsc-probe
+  linux-ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install GPUI platform dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libx11-xcb-dev libssl-dev libvulkan-dev ffmpeg xvfb
+      - run: cargo build --locked --release
+      - run: cargo test --locked --bin rumstsc
+      - run: xvfb-run -a cargo test --locked -p rumstsc-display native_x11
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Prepare isolated xrdp test server
+        run: |
+          bash scripts/prepare-xrdp.sh
+          CARGO_TARGET_DIR=.interop/target-linux cargo build --locked --no-default-features --bin rumstsc-probe
+      - name: Verify real TLS and legacy sessions
+        run: |
+          sudo bash scripts/xrdp-smoke.sh tls
+          sudo bash scripts/xrdp-smoke.sh legacy

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=rumstsc
+GenericName=Remote Desktop
+Comment=Minimal experimental RDP client
+Exec=rumstsc
+Icon=computer
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupWMClass=rumstsc

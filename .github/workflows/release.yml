@@ -1,0 +1,149 @@
+name: Build & Publish apt repo
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libx11-xcb-dev libssl-dev libvulkan-dev \
+            ffmpeg dpkg-dev
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+            VERSION="${VERSION}+git.${GITHUB_SHA::7}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Build .deb
+        run: |
+          bash packaging/linux/build-deb.sh \
+            target/release/rumstsc \
+            "${{ steps.version.outputs.version }}" \
+            dist
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+
+  publish:
+    needs: [build-deb]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/deb/*.deb
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Init gh-pages if missing
+        run: |
+          if [ ! -d gh-pages/.git ]; then
+            rm -rf gh-pages
+            mkdir gh-pages
+            cd gh-pages
+            git init
+            git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+            git checkout -b gh-pages
+          fi
+
+      - name: Install repo tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+
+      - name: Publish apt repo
+        run: |
+          mkdir -p gh-pages/pool/main
+          cp artifacts/deb/*.deb gh-pages/pool/main/
+          cd gh-pages
+          dpkg-scanpackages --multiversion pool/ > Packages
+          gzip -k -f Packages
+          cat > Release <<EOF
+          Origin: rumstsc
+          Label: rumstsc
+          Suite: stable
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: rumstsc apt repository
+          EOF
+          apt-ftparchive release . >> Release || true
+
+      - name: Write install page
+        run: |
+          cat > gh-pages/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>rumstsc packages</title>
+            <style>
+              body{font-family:monospace;max-width:820px;margin:40px auto;background:#0d1117;color:#c9d1d9;line-height:1.5}
+              h1,h2{color:#58a6ff} pre{background:#161b22;padding:16px;border-radius:6px;overflow-x:auto}
+              a{color:#79c0ff}
+            </style>
+          </head>
+          <body>
+            <h1>rumstsc — remote desktop client</h1>
+            <p>Source: <a href="https://github.com/Cattens-Roses/rumstsc">github.com/Cattens-Roses/rumstsc</a></p>
+
+            <h2>Debian / Ubuntu (apt)</h2>
+            <pre>echo "deb [trusted=yes] https://cattens-roses.github.io/rumstsc ./" \
+              | sudo tee /etc/apt/sources.list.d/rumstsc.list
+            sudo apt update
+            sudo apt install rumstsc</pre>
+          </body>
+          </html>
+          EOF
+
+      - name: Commit & push gh-pages
+        run: |
+          cd gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Ensure push auth works for both fresh and checked-out clones
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" 2>/dev/null || \
+            git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git add -A
+          git diff --cached --quiet || git commit -m "packages: deb"
+          git push origin HEAD:gh-pages --force
