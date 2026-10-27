@@ -24,7 +24,7 @@ sudo apt update
 sudo apt upgrade rumstsc
 ```
 
-Continuous package versions look like `0.1.0+<build>.git.<sha>` so each `main` publish sorts newer for apt.
+Continuous package versions look like `0.1.0.<build>+git.<sha>` so each `main` publish sorts newer for apt.
 
 Then run:
 
