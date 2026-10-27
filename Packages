@@ -1,13 +1,13 @@
 Package: rumstsc
-Version: 0.1.0+9.git.3da2496
+Version: 0.1.0.10+git.279ccc0
 Architecture: amd64
 Maintainer: Cattens-Roses <https://github.com/Cattens-Roses/rumstsc>
 Depends: libfontconfig1, libfreetype6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libxcb1, libx11-xcb1, libssl3, libvulkan1, libavcodec60 | libavcodec61 | libavcodec58, libavutil58 | libavutil59 | libavutil56, libswscale7 | libswscale8 | libswscale5
-Filename: pool/main/rumstsc_0.1.0+9.git.3da2496_amd64.deb
-Size: 5310336
-MD5sum: 48675da1b1acd7d5504ec103530a41c3
-SHA1: bbad875be82b920f83c70979b858069cb768e7e3
-SHA256: 7594c832be638e4f5d9b1c420fcbd323861def3d0a1b347a08b017754e835d29
+Filename: pool/main/rumstsc_0.1.0.10+git.279ccc0_amd64.deb
+Size: 5310180
+MD5sum: 03154c5c391f98264968a4df0da9097d
+SHA1: 0617899297a90702c84bef6f6a3a08b6ebbf3d46
+SHA256: bc27e18d50e71c4f1ca72c4819262ecf390d0ec00d15f9662b1108233bb0a677
 Section: net
 Priority: optional
 Description: Minimal experimental RDP client
