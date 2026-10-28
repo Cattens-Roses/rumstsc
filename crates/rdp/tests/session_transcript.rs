@@ -34,10 +34,7 @@ fn accept(listener: TcpListener) -> TcpStream {
         }
     }
 }
-fn server_settings(encrypted: bool) -> Vec<u8> {
-    server_settings_graphics(encrypted, false)
-}
-fn server_settings_graphics(encrypted: bool, graphics: bool) -> Vec<u8> {
+fn server_settings_channels(encrypted: bool, graphics: bool, clipboard: bool) -> Vec<u8> {
     let mut blocks = vec![];
     for (kind, mut body) in [
         (0x0c01, 0x80004u32.to_le_bytes().to_vec()),
@@ -54,14 +51,21 @@ fn server_settings_graphics(encrypted: bool, graphics: bool) -> Vec<u8> {
                 0,
             ],
         ),
-        (
-            0x0c03,
+        (0x0c03, {
+            let mut net = vec![0xeb, 3];
+            let count = u16::from(graphics) + u16::from(clipboard);
+            le16(&mut net, count);
             if graphics {
-                vec![0xeb, 3, 1, 0, 0xee, 3, 0, 0]
-            } else {
-                vec![0xeb, 3, 0, 0]
-            },
-        ),
+                le16(&mut net, 1006);
+            }
+            if clipboard {
+                le16(&mut net, 1006 + u16::from(graphics));
+            }
+            if count % 2 != 0 {
+                le16(&mut net, 0);
+            }
+            net
+        }),
     ] {
         if kind == 0x0c02 && encrypted {
             le32(&mut body, 32);
@@ -76,7 +80,7 @@ fn server_settings_graphics(encrypted: bool, graphics: bool) -> Vec<u8> {
     if graphics {
         le16(&mut blocks, 0x0c04);
         le16(&mut blocks, 6);
-        le16(&mut blocks, 1007);
+        le16(&mut blocks, 1007 + u16::from(clipboard));
     }
     let mut gcc = vec![
         0, 5, 0, 0x14, 0x7c, 0, 1, 0x2a, 0x14, 0x76, 0x0a, 1, 1, 0, 1, 0xc0, 0,
@@ -92,6 +96,14 @@ fn setup(stream: &mut TcpStream, encrypted: bool) {
     setup_graphics(stream, encrypted, false);
 }
 fn setup_graphics(stream: &mut TcpStream, encrypted: bool, graphics: bool) -> bool {
+    setup_channels(stream, encrypted, graphics, false)
+}
+fn setup_channels(
+    stream: &mut TcpStream,
+    encrypted: bool,
+    graphics: bool,
+    clipboard: bool,
+) -> bool {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -103,6 +115,7 @@ fn setup_graphics(stream: &mut TcpStream, encrypted: bool, graphics: bool) -> bo
     let p = wire::read_data(stream).unwrap();
     assert_eq!(&p[..2], &[0x7f, 0x65]);
     let requested_graphics = p.windows(8).any(|v| v == b"drdynvc\0");
+    assert_eq!(p.windows(8).any(|v| v == b"cliprdr\0"), clipboard);
     if graphics {
         assert!(requested_graphics);
         assert!(
@@ -114,11 +127,7 @@ fn setup_graphics(stream: &mut TcpStream, encrypted: bool, graphics: bool) -> bo
     }
     wire::write_data(
         stream,
-        &if graphics {
-            server_settings_graphics(encrypted, true)
-        } else {
-            server_settings(encrypted)
-        },
+        &server_settings_channels(encrypted, graphics, clipboard),
     )
     .unwrap();
     requested_graphics
@@ -134,6 +143,7 @@ fn options(listener: &TcpListener, insecure: bool) -> Options {
         width: 2,
         height: 2,
         allow_insecure: insecure,
+        clipboard: false,
     }
 }
 fn indication(payload: &[u8]) -> Vec<u8> {
@@ -166,6 +176,150 @@ fn client_payload(s: &mut TcpStream) -> Vec<u8> {
     r.take(5).unwrap();
     let n = r.per_length().unwrap();
     r.take(n).unwrap().to_vec()
+}
+#[test]
+fn clipboard_channel_unicode_roundtrip_and_paste_barrier() {
+    fn clip(kind: u16, flags: u16, body: &[u8]) -> Vec<u8> {
+        let mut p = vec![];
+        le16(&mut p, kind);
+        le16(&mut p, flags);
+        le32(&mut p, body.len() as u32);
+        p.extend(body);
+        p
+    }
+    fn local_text() -> String {
+        format!("local 🦀\n@{}", "ż".repeat(2000))
+    }
+    fn remote_text() -> String {
+        format!("zdalne żółć 🦀{}", "ę".repeat(2000))
+    }
+    fn server_clip(s: &mut TcpStream, p: &[u8]) {
+        let count = p.len().div_ceil(1600);
+        for (i, chunk) in p.chunks(1600).enumerate() {
+            let mut payload = vec![];
+            le32(&mut payload, p.len() as u32);
+            le32(
+                &mut payload,
+                u32::from(i == 0) | if i + 1 == count { 2 } else { 0 },
+            );
+            payload.extend(chunk);
+            let mut wire = indication(&payload);
+            wire[10..12].copy_from_slice(&1006u16.to_be_bytes());
+            s.write_all(&wire).unwrap();
+        }
+    }
+    fn read_clip(s: &mut TcpStream) -> Vec<u8> {
+        let mut output = vec![];
+        loop {
+            let p = wire::read_data(s).unwrap();
+            assert_eq!(u16::from_be_bytes([p[3], p[4]]), 1006);
+            let mut r = Reader::new(&p);
+            r.take(6).unwrap();
+            let len = r.per_length().unwrap();
+            let mut r = Reader::new(r.take(len).unwrap());
+            let total = r.u32().unwrap() as usize;
+            let flags = r.u32().unwrap();
+            if output.is_empty() {
+                assert_ne!(flags & 1, 0);
+            }
+            output.extend(r.rest());
+            if flags & 2 != 0 {
+                assert_eq!(output.len(), total);
+                return output;
+            }
+        }
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut o = options(&listener, true);
+    o.clipboard = true;
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let peer = thread::spawn(move || {
+        let mut s = accept(listener);
+        activate_channels(&mut s, 2, 2, false, true);
+        s.write_all(&indication(&data(40, &[0; 8]))).unwrap();
+        server_clip(
+            &mut s,
+            &clip(7, 0, &[1, 0, 0, 0, 1, 0, 12, 0, 2, 0, 0, 0, 2, 0, 0, 0]),
+        );
+        server_clip(&mut s, &clip(1, 0, &[]));
+        assert_eq!(&read_clip(&mut s)[..2], &7u16.to_le_bytes());
+        assert_eq!(read_clip(&mut s), clip(2, 0, &[]));
+        server_clip(&mut s, &clip(3, 1, &[]));
+        let formats = read_clip(&mut s);
+        assert_eq!(&formats[8..12], &13u32.to_le_bytes());
+        server_clip(&mut s, &clip(3, 1, &[]));
+        server_clip(&mut s, &clip(4, 0, &13u32.to_le_bytes()));
+        let expected: Vec<u8> = local_text()
+            .replace("\n", "\r\n")
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(read_clip(&mut s), clip(5, 1, &expected));
+        server_clip(&mut s, &formats);
+        assert_eq!(read_clip(&mut s), clip(3, 1, &[]));
+        assert_eq!(read_clip(&mut s), clip(4, 0, &13u32.to_le_bytes()));
+        let remote: Vec<u8> = remote_text()
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        server_clip(&mut s, &clip(5, 1, &remote));
+        let control = client_payload(&mut s);
+        assert_eq!(&control[28..32], &[0, 0, 0x1d, 0]);
+        let formats = read_clip(&mut s);
+        assert_eq!(&formats[..2], &2u16.to_le_bytes());
+        // The new local clipboard is served before V reaches the remote application.
+        server_clip(&mut s, &clip(4, 0, &13u32.to_le_bytes()));
+        let expected: Vec<u8> = "fresh @"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(read_clip(&mut s), clip(5, 1, &expected));
+        server_clip(&mut s, &clip(3, 1, &[]));
+        let paste = client_payload(&mut s);
+        assert_eq!(&paste[18..22], &[2, 0, 0, 0]);
+        assert_eq!(&paste[28..32], &[0, 0, 0x2f, 0]);
+        assert_eq!(&paste[40..44], &[0, 0x80, 0x2f, 0]);
+        let release = client_payload(&mut s);
+        assert_eq!(&release[28..32], &[0, 0x80, 0x1d, 0]);
+        done_tx.send(()).unwrap();
+        let mut b = [0];
+        assert_eq!(s.read(&mut b).unwrap(), 0);
+    });
+    let c = Connection::start(o).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(Instant::now() < deadline, "clipboard peer stalled");
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        match c.events.recv_timeout(Duration::from_millis(20)) {
+            Ok(Event::ClipboardReady) => c.set_clipboard(Some(local_text()), None).unwrap(),
+            Ok(Event::ClipboardText(text)) => {
+                assert_eq!(text, remote_text());
+                c.send(Input::Scancode {
+                    code: 0x1d,
+                    extended: false,
+                    released: false,
+                });
+                c.send(Input::Paste);
+                c.send(Input::Scancode {
+                    code: 0x1d,
+                    extended: false,
+                    released: true,
+                });
+            }
+            Ok(Event::ClipboardSync(request)) => c
+                .set_clipboard(Some("fresh @".into()), Some(request))
+                .unwrap(),
+            Ok(Event::Error(e) | Event::ClipboardWarning(e)) => panic!("{e}"),
+            _ => {}
+        }
+    }
+    drop(c);
+    peer.join().unwrap();
 }
 #[test]
 fn refuses_plaintext_before_username() {
@@ -221,15 +375,29 @@ fn activate(s: &mut TcpStream, width: u16, height: u16) {
     activate_graphics(s, width, height, false);
 }
 fn activate_graphics(s: &mut TcpStream, width: u16, height: u16, graphics: bool) -> bool {
-    let requested_graphics = setup_graphics(s, false, graphics);
+    activate_channels(s, width, height, graphics, false)
+}
+fn activate_channels(
+    s: &mut TcpStream,
+    width: u16,
+    height: u16,
+    graphics: bool,
+    clipboard: bool,
+) -> bool {
+    let requested_graphics = setup_channels(s, false, graphics, clipboard);
     assert_eq!(wire::read_data(s).unwrap(), [4, 1, 0, 1, 0]);
     assert_eq!(wire::read_data(s).unwrap(), [0x28]);
     wire::write_data(s, &[0x2e, 0, 0, 4]).unwrap();
-    let channels = if graphics {
-        vec![1005u16, 1003, 1006, 1007]
-    } else {
-        vec![1005u16, 1003]
-    };
+    let mut channels = vec![1005u16, 1003];
+    if graphics {
+        channels.push(1006);
+    }
+    if clipboard {
+        channels.push(1006 + u16::from(graphics));
+    }
+    if graphics {
+        channels.push(1007 + u16::from(clipboard));
+    }
     for ch in channels {
         let p = wire::read_data(s).unwrap();
         assert_eq!(p[0], 0x38);

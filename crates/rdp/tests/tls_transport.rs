@@ -215,6 +215,7 @@ fn cancelling_interactive_review_stops_worker() {
         width: 2,
         height: 2,
         allow_insecure: false,
+        clipboard: false,
     };
     let peer = thread::spawn(move || {
         let (mut s, _) = listener.accept().unwrap();

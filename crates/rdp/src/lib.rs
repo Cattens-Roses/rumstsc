@@ -6,6 +6,7 @@ pub mod bitmap;
 mod bulk;
 mod cache;
 mod clear;
+pub mod clipboard;
 pub mod credssp;
 pub mod crypto;
 mod dvc;

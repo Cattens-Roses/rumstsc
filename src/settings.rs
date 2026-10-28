@@ -29,6 +29,7 @@ pub struct Settings {
     pub show_status: bool,
     pub start_fullscreen: bool,
     pub private_screen: bool,
+    pub clipboard: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -43,6 +44,7 @@ impl Default for Settings {
             show_status: true,
             start_fullscreen: false,
             private_screen: false,
+            clipboard: true,
         }
     }
 }
@@ -91,6 +93,7 @@ impl Settings {
                 "show_status=false" => settings.show_status = false,
                 "start_fullscreen=true" => settings.start_fullscreen = true,
                 "private_screen=true" => settings.private_screen = true,
+                "clipboard=false" => settings.clipboard = false,
                 _ => {}
             }
             if line == "display=native" {
@@ -153,7 +156,10 @@ impl Settings {
         data.push_str(&format!("power={}\nbackground_pause={}\nremember_recent={}\nshow_status={}\nstart_fullscreen={}\n",
             match self.power_profile { PowerProfile::Smooth => "smooth", PowerProfile::Balanced => "balanced", PowerProfile::Battery => "battery" },
             self.pause_background, self.remember_recent, self.show_status, self.start_fullscreen));
-        data.push_str(&format!("private_screen={}\n", self.private_screen));
+        data.push_str(&format!(
+            "private_screen={}\nclipboard={}\n",
+            self.private_screen, self.clipboard
+        ));
         for host in self.recent.iter().filter(|_| self.remember_recent) {
             if !host.contains(['\n', '\r']) {
                 data.push_str(&format!("host={host}\n"));
@@ -193,11 +199,13 @@ mod tests {
             show_status: false,
             start_fullscreen: true,
             private_screen: true,
+            clipboard: false,
         };
         let encoded = original.encode();
         let mut restored = Settings::parse(&encoded);
         assert!(restored.theme == Theme::Light && restored.power_profile == PowerProfile::Battery);
         assert!(restored.native_display && restored.start_fullscreen && restored.private_screen);
+        assert!(!restored.clipboard);
         assert!(!restored.pause_background && !restored.show_status);
         assert_eq!(restored.recent, ["office.example"]);
         restored.remember_recent = false;

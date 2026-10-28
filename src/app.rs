@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 const RESOLUTIONS: [(u16, u16); 3] = [(1280, 720), (1600, 900), (1920, 1080)];
 #[derive(Clone)]
@@ -41,6 +41,10 @@ pub struct Client {
     settings: Settings,
     private_screen_active: bool,
     private_screen_error: Option<String>,
+    clipboard_live: bool,
+    clipboard_seen: Option<Option<String>>,
+    clipboard_poll: Instant,
+    clipboard_error: Option<String>,
     pub host: Entity<TextField>,
     user: Entity<TextField>,
     domain: Entity<TextField>,
@@ -166,6 +170,10 @@ impl Client {
             settings,
             private_screen_active,
             private_screen_error,
+            clipboard_live: false,
+            clipboard_seen: None,
+            clipboard_poll: Instant::now(),
+            clipboard_error: None,
             host,
             user,
             domain,
@@ -266,7 +274,11 @@ impl Client {
             width,
             height,
             allow_insecure: self.insecure,
+            clipboard: self.settings.clipboard,
         };
+        self.clipboard_live = self.settings.clipboard;
+        self.clipboard_seen = None;
+        self.clipboard_error = None;
         match Connection::start_interactive_traced(options, Settings::trace_path()) {
             Ok(connection) => {
                 self.password.update(cx, |f, cx| f.set(String::new(), cx));
@@ -304,6 +316,23 @@ impl Client {
         }));
         cx.notify();
     }
+    fn sync_clipboard(&mut self, request: Option<u64>, force: bool, cx: &mut Context<Self>) {
+        if !self.clipboard_live {
+            return;
+        }
+        let text = cx.read_from_clipboard().and_then(|item| item.text());
+        if (force || self.clipboard_seen.as_ref() != Some(&text))
+            && let Some(connection) = &self.connection
+        {
+            self.clipboard_seen = Some(text.clone());
+            match connection.set_clipboard(text, request) {
+                Ok(()) => self.clipboard_error = None,
+                Err(error) => self.clipboard_error = Some(error.to_string()),
+            }
+            cx.notify();
+        }
+    }
+
     fn poll(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(c) = &self.connection else {
             return false;
@@ -314,6 +343,20 @@ impl Client {
         for event in events {
             changed = true;
             match event {
+                Event::ClipboardReady => self.sync_clipboard(None, true, cx),
+                Event::ClipboardSync(request) => self.sync_clipboard(Some(request), true, cx),
+                Event::ClipboardText(text) => {
+                    if self.clipboard_live {
+                        let text = if cfg!(target_os = "linux") {
+                            text.replace("\r\n", "\n")
+                        } else {
+                            text
+                        };
+                        self.clipboard_seen = Some(Some(text.clone()));
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
+                Event::ClipboardWarning(error) => self.clipboard_error = Some(error),
                 Event::CertificateReview(certificate) => {
                     self.status = "Review server certificate".into();
                     self.certificate_review = Some(certificate);
@@ -389,6 +432,13 @@ impl Client {
             self.clear_texture(None, cx);
             cx.notify();
             return false;
+        }
+        if self.active
+            && self.clipboard_live
+            && self.clipboard_poll.elapsed() >= Duration::from_millis(250)
+        {
+            self.clipboard_poll = Instant::now();
+            self.sync_clipboard(None, false, cx);
         }
         if let Some(error) = self.native.as_ref().and_then(|n| n.error()) {
             self.native = None;
@@ -537,7 +587,8 @@ impl Client {
     }
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = e.keystroke.key.as_str();
-        let mods = e.keystroke.modifiers;
+        let mut mods = e.keystroke.modifiers;
+        mods.shift |= crate::keyboard::requires_shift(key);
         if self.show_settings {
             if key == "escape" {
                 self.open_settings(false, cx);
@@ -558,6 +609,11 @@ impl Client {
         if self.active {
             if self.capture {
                 self.modifiers(mods);
+                if mods.control && !mods.alt && key.eq_ignore_ascii_case("v") {
+                    self.send(Input::Paste);
+                    cx.stop_propagation();
+                    return;
+                }
                 if let Some((code, extended)) = scancode(key) {
                     self.held.insert((code, extended));
                     self.send(Input::Scancode {

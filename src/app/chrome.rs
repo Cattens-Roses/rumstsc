@@ -61,6 +61,16 @@ impl Render for Client {
                 cx.listener(|this, e: &ModifiersChangedEvent, _, _| this.modifiers(e.modifiers)),
             )
             .when(!immersive, |d| d.child(self.header(window, cx)))
+            .when(self.clipboard_error.is_some(), |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .text_xs()
+                        .text_color(p.error)
+                        .child(self.clipboard_error.clone().unwrap_or_default()),
+                )
+            })
             .when(self.private_screen_error.is_some(), |d| {
                 d.child(
                     div()

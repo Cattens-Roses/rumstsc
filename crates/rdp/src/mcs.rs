@@ -42,6 +42,16 @@ pub fn connect_initial_graphics(
     legacy: bool,
     graphics: bool,
 ) -> Result<Vec<u8>> {
+    connect_initial_channels(width, height, selected, legacy, graphics, false)
+}
+pub fn connect_initial_channels(
+    width: u16,
+    height: u16,
+    selected: u32,
+    legacy: bool,
+    graphics: bool,
+    clipboard: bool,
+) -> Result<Vec<u8>> {
     let mut core = vec![];
     u32le(&mut core, 0x00080004);
     u16le(&mut core, width);
@@ -79,10 +89,14 @@ pub fn connect_initial_graphics(
     u32le(&mut security, 0);
     blocks.extend(block(0xc002, &security));
     let mut network = vec![];
-    u32le(&mut network, if graphics { 1 } else { 0 });
+    u32le(&mut network, u32::from(graphics) + u32::from(clipboard));
     if graphics {
         network.extend(b"drdynvc\0");
         u32le(&mut network, 0x80000000);
+    }
+    if clipboard {
+        network.extend(b"cliprdr\0");
+        u32le(&mut network, 0xc0000000);
     }
     blocks.extend(block(0xc003, &network));
     if graphics {

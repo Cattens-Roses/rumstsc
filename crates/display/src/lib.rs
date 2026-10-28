@@ -292,6 +292,7 @@ struct Keys {
     input: SyncSender<Input>,
     buttons: u16,
     position: (u16, u16),
+    paste_held: bool,
 }
 impl Keys {
     fn new(input: SyncSender<Input>) -> Self {
@@ -300,9 +301,24 @@ impl Keys {
             input,
             buttons: 0,
             position: (0, 0),
+            paste_held: false,
         }
     }
     fn key(&mut self, code: u16, extended: bool, released: bool) {
+        if code == 0x2f && !extended {
+            if released && self.paste_held {
+                self.paste_held = false;
+                return;
+            }
+            if !released
+                && self.held.iter().any(|k| k.0 == 0x1d)
+                && !self.held.iter().any(|k| k.0 == 0x38)
+            {
+                self.paste_held = true;
+                let _ = self.input.send(Input::Paste);
+                return;
+            }
+        }
         if released {
             self.held.remove(&(code, extended));
         } else {
@@ -315,6 +331,7 @@ impl Keys {
         });
     }
     fn release(&mut self) {
+        self.paste_held = false;
         for (code, extended) in std::mem::take(&mut self.held) {
             let _ = self.input.send(Input::Scancode {
                 code,
@@ -362,6 +379,34 @@ impl Keys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_paste_is_one_command_and_keeps_modifier_order() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        let mut keys = Keys::new(tx);
+        keys.key(0x1d, false, false);
+        keys.key(0x2f, false, false);
+        keys.key(0x2f, false, true);
+        keys.key(0x1d, false, true);
+        let events: Vec<_> = rx.try_iter().collect();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events[0],
+            Input::Scancode {
+                code: 0x1d,
+                released: false,
+                ..
+            }
+        ));
+        assert!(matches!(events[1], Input::Paste));
+        assert!(matches!(
+            events[2],
+            Input::Scancode {
+                code: 0x1d,
+                released: true,
+                ..
+            }
+        ));
+    }
     #[test]
     fn fullscreen_fills_matching_monitor_and_corner_does_not_interrupt_drag() {
         let shared = shared();

@@ -35,6 +35,7 @@ pub struct Options {
     pub height: u16,
     /// Explicit acknowledgement that this experimental subset sends plaintext.
     pub allow_insecure: bool,
+    pub clipboard: bool,
 }
 #[derive(Debug)]
 pub enum Event {
@@ -43,6 +44,10 @@ pub enum Event {
     Graphics(&'static str),
     Pointer(crate::pointer::Pointer),
     CertificateReview(CertificateReview),
+    ClipboardReady,
+    ClipboardText(String),
+    ClipboardSync(u64),
+    ClipboardWarning(String),
     Active,
     Error(String),
     Closed,
@@ -60,12 +65,14 @@ pub enum Input {
         flags: u16,
     },
     Synchronize,
+    Paste,
 }
 pub struct Connection {
     pub events: Receiver<Event>,
     pub frame: Arc<Mutex<Frame>>,
     pub trace: Arc<Trace>,
     snapshots: SnapshotClient,
+    clipboard: Arc<Mutex<Option<crate::clipboard::Local>>>,
     input: SyncSender<Input>,
     stop: Arc<AtomicBool>,
     socket: Arc<Mutex<Option<TcpStream>>>,
@@ -108,6 +115,8 @@ impl Connection {
             Arc::new(Mutex::new(Frame::new(options.width, options.height)?))
         };
         let (tx, events) = mpsc::sync_channel(32);
+        let clipboard = Arc::new(Mutex::new(None));
+        let worker_clipboard = clipboard.clone();
         let (input, rx) = mpsc::sync_channel(256);
         let stop = Arc::new(AtomicBool::new(false));
         let socket = Arc::new(Mutex::new(None));
@@ -142,7 +151,15 @@ impl Connection {
         thread::Builder::new()
             .name("rdp-session".into())
             .spawn(move || {
-                let result = run(options, &tx, &mut graphics, rx, &s, &c, review);
+                let result = run(
+                    options,
+                    &tx,
+                    &mut graphics,
+                    (rx, worker_clipboard),
+                    &s,
+                    &c,
+                    review,
+                );
                 let graphics_result = graphics.finish();
                 let result = result.and(graphics_result);
                 worker_trace.mark("session_finished", "network", 0);
@@ -164,11 +181,23 @@ impl Connection {
             frame,
             trace,
             snapshots,
+            clipboard,
             input,
             stop,
             socket,
             certificate_decision: interactive.then_some(decision_tx),
         })
+    }
+    pub fn set_clipboard(&self, text: Option<String>, request: Option<u64>) -> Result<()> {
+        if text.as_ref().is_some_and(|s| {
+            s.encode_utf16().count() * 2 + 10 > crate::clipboard::LIMIT || s.contains('\0')
+        }) {
+            return Err(invalid("clipboard text exceeds 512 KiB or contains NUL"));
+        }
+        let mut pending = self.clipboard.lock().unwrap();
+        let request = request.or_else(|| pending.as_ref().and_then(|p| p.request));
+        *pending = Some(crate::clipboard::Local { text, request });
+        Ok(())
     }
     pub fn input_sender(&self) -> SyncSender<Input> {
         self.input.clone()
@@ -251,6 +280,18 @@ pub fn input_pdu(user: u16, share_id: u32, input: Input) -> Vec<u8> {
             u16le(&mut body, x);
             u16le(&mut body, y);
         }
+        Input::Paste => {
+            body[0] = 2;
+            for released in [false, true] {
+                if released {
+                    u32le(&mut body, 0);
+                }
+                u16le(&mut body, 4);
+                u16le(&mut body, if released { 0x8000 } else { 0 });
+                u16le(&mut body, 0x2f);
+                u16le(&mut body, 0);
+            }
+        }
         Input::Synchronize => {
             u16le(&mut body, 0);
             body.extend([0; 6]);
@@ -305,6 +346,29 @@ fn cap(out: &mut Vec<u8>, kind: u16, bytes: &[u8]) {
     u16le(out, (bytes.len() + 4) as u16);
     out.extend(bytes);
 }
+fn queue(
+    out: &mut Vec<u8>,
+    user: u16,
+    channel: u16,
+    payload: &[u8],
+    protection: &mut Option<Legacy>,
+) -> Result<()> {
+    if out.len() + payload.len() + 32 > 1_048_576 {
+        return Err(invalid("send buffer limit"));
+    }
+    let mut data = vec![2, 0xf0, 0x80];
+    let encrypted;
+    let payload = if let Some(legacy) = protection {
+        encrypted = legacy.protect(0, payload);
+        encrypted.as_slice()
+    } else {
+        payload
+    };
+    data.extend(mcs::send_data(user, channel, payload)?);
+    out.extend(wire::tpkt(&data)?);
+    Ok(())
+}
+
 #[cfg(test)]
 fn confirm_active(user: u16, share_id: u32, width: u16, height: u16) -> Vec<u8> {
     confirm_active_depth(user, share_id, width, height, 24)
@@ -405,11 +469,12 @@ fn run(
     mut o: Options,
     tx: &SyncSender<Event>,
     graphics: &mut Decoder,
-    input: Receiver<Input>,
+    commands: (Receiver<Input>, Arc<Mutex<Option<crate::clipboard::Local>>>),
     stop: &AtomicBool,
     socket: &Mutex<Option<TcpStream>>,
     review: Option<ReviewCertificate>,
 ) -> Result<()> {
+    let (input, clipboard_mailbox) = commands;
     let trace = graphics.trace.clone();
     let mut desktop = (o.width, o.height);
     if o.domain.is_empty()
@@ -469,12 +534,13 @@ fn run(
     let mcs_span = trace.span("mcs_settings_exchange", "network", 0);
     wire::write_data(
         &mut stream,
-        &mcs::connect_initial_graphics(
+        &mcs::connect_initial_channels(
             o.width,
             o.height,
             selected,
             security == Security::Legacy,
             gfx_enabled,
+            o.clipboard,
         )?,
     )?;
     let settings = mcs::connect_response(&wire::read_data(&mut stream)?)?;
@@ -519,10 +585,31 @@ fn run(
     wire::write_data(&mut attach, &[0x28])?;
     stream.write_all(&attach)?;
     let user = mcs::attach_confirm(&wire::read_data(&mut stream)?)?;
-    if settings.static_channels.len() > usize::from(gfx_enabled) {
+    if settings.static_channels.len() > usize::from(gfx_enabled) + usize::from(o.clipboard) {
         return Err(invalid("unrequested static channels"));
     }
-    let gfx_channel = settings.static_channels.first().copied();
+    let gfx_channel = if gfx_enabled {
+        settings.static_channels.first().copied()
+    } else {
+        None
+    };
+    let clipboard_channel = if o.clipboard {
+        settings
+            .static_channels
+            .get(usize::from(gfx_enabled))
+            .copied()
+    } else {
+        None
+    };
+    if o.clipboard && clipboard_channel.is_none() {
+        let _ = tx.send(Event::ClipboardWarning(
+            "Server did not provide clipboard redirection".into(),
+        ));
+    }
+    let mut clipboard = crate::clipboard::Clipboard::default();
+    let mut paste: Option<(u64, Instant, bool)> = None;
+    let mut paste_result = None;
+    let mut next_clipboard_request = 0u64;
     let mut channels = vec![user, settings.channel];
     channels.extend(&settings.static_channels);
     if settings.message_channel.is_some() && !gfx_enabled {
@@ -598,10 +685,70 @@ fn run(
         if !active && last_packet.elapsed() > Duration::from_secs(15) {
             return Err(invalid("session activation timed out"));
         }
+        if written > 0 {
+            writes.drain(..written);
+            written = 0;
+        }
         let mut progressed = false;
-        if writes.len() - written < 65536 && active {
+        if let Some(channel) = clipboard_channel {
+            if let Some(local) = clipboard_mailbox.lock().unwrap().take() {
+                let matching = paste.as_ref().is_some_and(|p| Some(p.0) == local.request);
+                match clipboard.set_local(local.text) {
+                    Ok(()) => {
+                        if matching && let Some(wait) = paste.as_mut() {
+                            wait.2 = true;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Event::ClipboardWarning(error.to_string()));
+                        if matching {
+                            paste_result = Some(false);
+                        }
+                    }
+                }
+            }
+            while writes.len() - written < 65536 {
+                let Some(packet) = clipboard.outgoing.pop_front() else {
+                    break;
+                };
+                queue_channel(&mut writes, user, channel, &packet, &mut protection)?;
+            }
+            if paste
+                .as_ref()
+                .is_some_and(|p| p.1.elapsed() > Duration::from_secs(5))
+            {
+                paste_result = Some(false);
+            }
+            if let Some(ok) = paste_result.take()
+                && paste.take().is_some()
+            {
+                if ok
+                    && active
+                    && let Some(share) = share_id
+                {
+                    queue(
+                        &mut writes,
+                        user,
+                        settings.channel,
+                        &input_pdu(user, share, Input::Paste),
+                        &mut protection,
+                    )?;
+                } else {
+                    let _ = tx.send(Event::ClipboardWarning(
+                        "Clipboard synchronization failed or timed out; paste was not sent".into(),
+                    ));
+                }
+            }
+        }
+        if writes.len() - written < 65536 && active && paste.is_none() {
             for _ in 0..64 {
                 match input.try_recv() {
+                    Ok(Input::Paste) if clipboard_channel.is_some() => {
+                        next_clipboard_request = next_clipboard_request.wrapping_add(1);
+                        paste = Some((next_clipboard_request, Instant::now(), false));
+                        let _ = tx.send(Event::ClipboardSync(next_clipboard_request));
+                        break;
+                    }
                     Ok(i) => queue(
                         &mut writes,
                         user,
@@ -684,6 +831,7 @@ fn run(
             }
             let (channel, payload) = mcs::receive_channel_data(&packet[3..])?;
             if channel != settings.channel
+                && Some(channel) != clipboard_channel
                 && Some(channel) != gfx_channel
                 && Some(channel) != settings.message_channel
             {
@@ -727,6 +875,26 @@ fn run(
                     };
                     queue(&mut writes, user, channel, &framed, &mut None)?;
                     trace.mark("autodetect_response", "network", 1);
+                }
+            } else if Some(channel) == clipboard_channel {
+                let mut r = Reader::new(&data);
+                let total = r.u32()? as usize;
+                let flags = r.u32()?;
+                let bytes = bulk.decode((flags >> 16) as u8, r.rest())?;
+                for action in clipboard.chunk(total, flags, bytes)? {
+                    match action {
+                        crate::clipboard::Action::Ready => {
+                            let _ = tx.send(Event::ClipboardReady);
+                        }
+                        crate::clipboard::Action::Text(text) => {
+                            let _ = tx.send(Event::ClipboardText(text));
+                        }
+                        crate::clipboard::Action::Settled(ok) => {
+                            if paste.as_ref().is_some_and(|p| p.2) {
+                                paste_result = Some(ok);
+                            }
+                        }
+                    }
                 }
             } else if Some(channel) == gfx_channel {
                 let mut virtual_data = Reader::new(&data);
@@ -812,6 +980,8 @@ fn run(
                     let server = p.u16()?;
                     match kind & 15 {
                         1 => {
+                            paste = None;
+                            paste_result = None;
                             active = false;
                             trace.mark("demand_active_received", "network", 0);
                             let id = demand_active(p.rest(), &mut desktop)?;
@@ -864,6 +1034,8 @@ fn run(
                             status(tx, "Activating remote desktop…");
                         }
                         6 => {
+                            paste = None;
+                            paste_result = None;
                             active = false;
                             share_id = None;
                             status(
@@ -964,34 +1136,20 @@ fn queue_channel(
     payload: &[u8],
     protection: &mut Option<Legacy>,
 ) -> Result<()> {
-    // DVC packets are deliberately below the 1600-byte static-channel chunk.
-    let mut framed = vec![];
-    u32le(&mut framed, payload.len() as u32);
-    u32le(&mut framed, 3);
-    framed.extend(payload);
-    queue(out, user, channel, &framed, protection)
-}
-
-fn queue(
-    out: &mut Vec<u8>,
-    user: u16,
-    channel: u16,
-    payload: &[u8],
-    protection: &mut Option<Legacy>,
-) -> Result<()> {
-    if out.len() + payload.len() + 32 > 1_048_576 {
-        return Err(invalid("send buffer limit"));
+    if payload.len() > crate::clipboard::LIMIT {
+        return Err(invalid("virtual channel message limit"));
     }
-    let mut data = vec![2, 0xf0, 0x80];
-    let encrypted;
-    let payload = if let Some(legacy) = protection {
-        encrypted = legacy.protect(0, payload);
-        encrypted.as_slice()
-    } else {
-        payload
-    };
-    data.extend(mcs::send_data(user, channel, payload)?);
-    out.extend(wire::tpkt(&data)?);
+    let count = payload.len().div_ceil(1600);
+    for (i, chunk) in payload.chunks(1600).enumerate() {
+        let mut framed = vec![];
+        u32le(&mut framed, payload.len() as u32);
+        u32le(
+            &mut framed,
+            u32::from(i == 0) | if i + 1 == count { 2 } else { 0 },
+        );
+        framed.extend(chunk);
+        queue(out, user, channel, &framed, protection)?;
+    }
     Ok(())
 }
 

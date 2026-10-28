@@ -72,6 +72,7 @@ fn run() -> rumstsc_rdp::Result<()> {
                 width: 1280,
                 height: 720,
                 allow_insecure: false,
+                clipboard: false,
             },
             trace_path.clone(),
         )?;

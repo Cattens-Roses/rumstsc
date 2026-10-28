@@ -1,6 +1,12 @@
-//! US set-1 scan codes. Modifiers are handled separately through GPUI events.
+/// GPUI can canonicalize Shift+2 to "@" while clearing the Shift flag.
+pub fn requires_shift(key: &str) -> bool {
+    key.len() == 1
+        && (key.as_bytes()[0].is_ascii_uppercase() || "~!@#$%^&*()_+{}|:\"<>?".contains(key))
+}
+// US set-1 scan codes. Modifiers are handled separately through GPUI events.
 pub fn scancode(key: &str) -> Option<(u16, bool)> {
-    let code = match key {
+    let normalized = key.to_ascii_lowercase();
+    let code = match normalized.as_str() {
         "escape" => 0x01,
         "1" | "!" => 0x02,
         "2" | "@" => 0x03,
@@ -88,5 +94,20 @@ mod tests {
         assert_eq!(scancode("delete"), Some((0x53, true)));
         assert_eq!(scancode("a"), Some((0x1e, false)));
         assert_eq!(scancode("é"), None);
+    }
+    #[test]
+    fn canonicalized_shifted_keys_keep_their_physical_key() {
+        for (base, shifted) in [
+            ("2", "@"),
+            ("1", "!"),
+            ("3", "#"),
+            ("'", "\""),
+            ("/", "?"),
+            ("a", "A"),
+        ] {
+            assert_eq!(scancode(base), scancode(shifted));
+            assert!(requires_shift(shifted));
+            assert!(!requires_shift(base));
+        }
     }
 }

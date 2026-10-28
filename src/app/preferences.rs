@@ -137,6 +137,9 @@ impl Client {
                     .child("Network traffic and protocol decoding continue so remote updates stay correct. For further savings, choose a lower resolution in Display.")),
             SettingsTab::Privacy => section("Privacy & history", "Passwords are never saved. Certificate trust still requires verification.", p)
                 .child(setting("Private screen", "Windows 10 (2004+) / 11: exclude this local window from compatible screenshot and recording APIs. This is not DRM and does not guarantee blocking Veyon, administrator tools, cameras or recording on the remote server.", self.private_screen_control(cx), p))
+                .child(setting("Share text clipboard", "Copy and paste Unicode text between this computer and the remote desktop. Clipboard text is shared with the server. Changes apply to your next connection; files and images are not supported.",
+                    choice("clipboard",if self.settings.clipboard {"On"} else {"Off"},self.settings.clipboard,p)
+                        .on_click(cx.listener(|this,_,_,cx| {this.settings.clipboard = !this.settings.clipboard;this.preferences_changed(cx);})),p))
                 .child(setting("Remember recent computers", "Save up to five successful connection addresses on this device. Turning this off also clears existing history.",
                     choice("remember-recent",if self.settings.remember_recent { "On" } else { "Off" },self.settings.remember_recent,p)
                         .on_click(cx.listener(|this,_,_,cx| { this.settings.remember_recent = !this.settings.remember_recent;
