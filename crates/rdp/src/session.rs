@@ -881,6 +881,19 @@ fn run(
                 let total = r.u32()? as usize;
                 let flags = r.u32()?;
                 let bytes = bulk.decode((flags >> 16) as u8, r.rest())?;
+                if flags & 1 != 0 && bytes.len() >= 8 {
+                    trace.mark(
+                        "clipboard_message_type",
+                        "network",
+                        u16::from_le_bytes([bytes[0], bytes[1]]) as u64,
+                    );
+                    trace.mark(
+                        "clipboard_declared_data_length",
+                        "network",
+                        u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as u64,
+                    );
+                    trace.mark("clipboard_channel_length", "network", total as u64);
+                }
                 for action in clipboard.chunk(total, flags, bytes)? {
                     match action {
                         crate::clipboard::Action::Ready => {

@@ -105,10 +105,16 @@ impl Clipboard {
         let kind = r.u16()?;
         let flags = r.u16()?;
         let n = r.u32()? as usize;
-        if n != r.remaining() {
-            return Err(invalid("clipboard PDU length"));
+        // MS-RDPECLIP 6, Appendix A <1>: Windows may append four bytes
+        // outside dataLen. Parse only the declared body; never interpret the
+        // optional trailer as capability, format, or UTF-16 data.
+        if n > r.remaining() || ![0, 4].contains(&(r.remaining() - n)) {
+            return Err(invalid(&format!(
+                "clipboard PDU length (type {kind:#06x}, declared {n}, received {})",
+                r.remaining()
+            )));
         }
-        let body = r.rest();
+        let body = r.take(n)?;
         let mut actions = vec![];
         match kind {
             7 => {
@@ -228,6 +234,60 @@ mod tests {
     use super::*;
     fn receive(c: &mut Clipboard, p: Vec<u8>) -> Vec<Action> {
         c.chunk(p.len(), 3, &p).unwrap()
+    }
+    #[test]
+    fn windows_four_byte_trailer_is_outside_declared_pdu_body() {
+        // MS-RDPECLIP Appendix A <1>: Windows appends four bytes that are not
+        // included in dataLen. Their values are not part of the clipboard PDU.
+        fn padded(kind: u16, flags: u16, body: &[u8]) -> Vec<u8> {
+            let mut p = packet(kind, flags, body);
+            p.extend([0xa5, 0x5a, 0x12, 0x34]);
+            p
+        }
+        let mut c = Clipboard::default();
+        receive(
+            &mut c,
+            padded(7, 0, &[1, 0, 0, 0, 1, 0, 12, 0, 2, 0, 0, 0, 2, 0, 0, 0]),
+        );
+        assert!(matches!(
+            receive(&mut c, padded(1, 0, &[]))[0],
+            Action::Ready
+        ));
+        c.outgoing.clear();
+        assert!(matches!(
+            receive(&mut c, padded(3, 1, &[]))[0],
+            Action::Settled(true)
+        ));
+        c.set_local(Some("local @".into())).unwrap();
+        c.outgoing.clear();
+        receive(&mut c, padded(4, 0, &13u32.to_le_bytes()));
+        let local: Vec<u8> = "local @"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(c.outgoing.pop_front().unwrap(), packet(5, 1, &local));
+        let mut formats = 13u32.to_le_bytes().to_vec();
+        formats.extend([0; 32]);
+        receive(&mut c, padded(2, 0, &formats));
+        let remote: Vec<u8> = "ż@"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(matches!(&receive(&mut c,padded(5,1,&remote))[0],Action::Text(text) if text=="ż@"));
+        for extra in [1, 2, 3, 5, 8] {
+            let mut p = packet(1, 0, &[]);
+            p.resize(p.len() + extra, 0);
+            assert!(Clipboard::default().chunk(p.len(), 3, &p).is_err());
+        }
+        let mut truncated = packet(7, 0, &[0; 16]);
+        truncated.pop();
+        assert!(
+            Clipboard::default()
+                .chunk(truncated.len(), 3, &truncated)
+                .is_err()
+        );
     }
     #[test]
     fn unicode_bidirectional_and_serialized_advertisements() {

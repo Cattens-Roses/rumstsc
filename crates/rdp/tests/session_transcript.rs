@@ -194,6 +194,10 @@ fn clipboard_channel_unicode_roundtrip_and_paste_barrier() {
         format!("zdalne żółć 🦀{}", "ę".repeat(2000))
     }
     fn server_clip(s: &mut TcpStream, p: &[u8]) {
+        // Windows product behavior: an extra DWORD outside CLIPRDR dataLen.
+        let mut padded = p.to_vec();
+        padded.extend([0xa5, 0x5a, 0x12, 0x34]);
+        let p = padded.as_slice();
         let count = p.len().div_ceil(1600);
         for (i, chunk) in p.chunks(1600).enumerate() {
             let mut payload = vec![];

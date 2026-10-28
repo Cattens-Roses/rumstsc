@@ -17,6 +17,8 @@ fn run() -> rumstsc_rdp::Result<()> {
     let mut host = None;
     let mut mode = SecurityMode::Auto;
     let mut session = false;
+    let mut clipboard = false;
+    let mut hold_ms = 500;
     let mut output = None;
     let mut trace_path = None;
     let mut pin = None;
@@ -26,11 +28,21 @@ fn run() -> rumstsc_rdp::Result<()> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: rumstsc-probe [--mode auto|tls|nla|legacy] [--pin SHA256] [--session] [--output FRAME.ppm] [--trace TRACE.json] [--user USER] [--domain DOMAIN] HOST[:PORT]\nOnly --session starts a desktop session. For authentication, read RUMSTSC_PASSWORD from the environment; passwords are never accepted on the command line."
+                    "Usage: rumstsc-probe [--mode auto|tls|nla|legacy] [--pin SHA256] [--session] [--clipboard] [--hold-ms N] [--output FRAME.ppm] [--trace TRACE.json] [--user USER] [--domain DOMAIN] HOST[:PORT]\nOnly --session starts a desktop session. For authentication, read RUMSTSC_PASSWORD from the environment; passwords are never accepted on the command line."
                 );
                 return Ok(());
             }
             "--session" => session = true,
+            "--clipboard" => clipboard = true,
+            "--hold-ms" => {
+                hold_ms = args
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .filter(|n| *n <= 20000)
+                    .ok_or_else(|| {
+                        rumstsc_rdp::Error::Protocol("--hold-ms must be 0..20000".into())
+                    })?
+            }
             "--output" => output = args.next(),
             "--trace" => {
                 trace_path = Some(std::path::PathBuf::from(args.next().ok_or_else(|| {
@@ -72,7 +84,7 @@ fn run() -> rumstsc_rdp::Result<()> {
                 width: 1280,
                 height: 720,
                 allow_insecure: false,
-                clipboard: false,
+                clipboard,
             },
             trace_path.clone(),
         )?;
@@ -123,7 +135,7 @@ fn run() -> rumstsc_rdp::Result<()> {
             let frame = connection.frame.lock().unwrap();
             if active && !snapshot_pixels.is_empty() {
                 let first = first_frame.get_or_insert_with(std::time::Instant::now);
-                if first.elapsed() < std::time::Duration::from_millis(500) {
+                if first.elapsed() < std::time::Duration::from_millis(hold_ms) {
                     continue;
                 }
                 println!(
