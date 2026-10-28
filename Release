@@ -5,20 +5,20 @@ Codename: stable
 Architectures: amd64
 Components: main
 Description: rumstsc apt repository
-Date: Wed, 28 Oct 2026 15:05:11 +0000
+Date: Wed, 28 Oct 2026 23:38:54 +0000
 MD5Sum:
- 2ab913a1349f7956f2e27334468d8c70             1568 Packages
- d8f70677016d75a3cccf6ccccc2c2fe9              628 Packages.gz
- eadb1f0cfd8db2013a71f5da5bab5fb4              174 Release
+ fbe3476dc40fe7842c86a48c24515b38             2352 Packages
+ 4ae639c9b13a1c2bd228176043dd28a9              750 Packages.gz
+ 5d472df15d6e5bbf03e53fec818ade42              174 Release
 SHA1:
- c2bdcc008ee16d3c360d4475c6210f4f9d6b10af             1568 Packages
- 3e7a48821c71f236b464963941ee06f853199520              628 Packages.gz
- 50e669949347855d09ad2e789c2f136330f19ed9              174 Release
+ d92b336ed7e26f8033bd93bd51e9fae6b1ac36a7             2352 Packages
+ 4584d8e016601efa7681f43fddfbae6394ba389a              750 Packages.gz
+ e54fb1bb61f631f88d1f6aa3f506e2eb7aa461d6              174 Release
 SHA256:
- 220cae438bb87e6f6dde67818f2d336f35aceef669c26ff16a979f0aa3135b26             1568 Packages
- 3b77a540d0e186abc5b50c775f64607ff10a3eeca76d223cf40fa6b30ffb5145              628 Packages.gz
- 16522d50a105ec34223a441273a072c86ff8801db86ba0cac6f5dedbba000d2f              174 Release
+ 90f7b4bf649d4fd0c9ddbb7027e26f4716f5c88ad2abf1217deb5792323f1328             2352 Packages
+ f45da1722a99c6c057451add141c33a9c19147ec45878a6adc6afc07c3942df0              750 Packages.gz
+ d8041a4d9720ff86415557caef1b31c51a4b25e81395c9653ecacfeb83466895              174 Release
 SHA512:
- 280d29822a32cf89952cb97ac72e31b725e1341b91726ec5e52d4e7ca80293acfe5ee7752bbc7de15f224d73c571ef1d936b82fa8da39dec8009aa5fd87f78a4             1568 Packages
- 117aa3d0f63f32566c39b4bb3e85aecb02d71a5123343cd38c35858c6481c2df3dbc967c92f8745ddc361d945beaf41cfcc11c781e6f15c5eeef4752b68b2e94              628 Packages.gz
- 1d84fc21dd3c96beeae23e63ecd45af3d2d5e37df02f79975737ab818e1f0c40365a6a8536360d664ad818a77473646c406faa69f34368078d9a21b12013100d              174 Release
+ 4b4f0d31dc0e6b955dce7bcdeff1f90a58b818eb29fa65b655d5e596cc9e4bdd1ec314dc4250873668aab38453973ba46f74db4906c0d1f5703834cacefdafbf             2352 Packages
+ f44e5bcad849b9540c3219688ea9e391b3cf6e0a5d58ccf5b02c51a359711c0ec4ebf7e6eae37cc78586254b2f096070135ce5c1c832a011836353fa2f7d6021              750 Packages.gz
+ dbe678a770606e28d835824fc27240561c259a481d90f721db9982e656229f1ddddc9d491cb11a080adba2b86c9e02bfc624b69907dcb9186bf0a28a11af3c6f              174 Release
