@@ -28,6 +28,16 @@ pub enum Parent {
     X11(u32),
     X11Process(u32),
 }
+/// Protects our top-level window through supported OS capture APIs.
+/// This is capture exclusion, not DRM or protection against privileged software.
+pub fn set_private_screen(parent: Parent, enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    if let Parent::Windows(window) = parent {
+        return win::set_private_screen(window, enabled);
+    }
+    let _ = (parent, enabled);
+    Err("Private screen capture exclusion is unavailable on this platform".into())
+}
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Bounds {
     pub x: i32,

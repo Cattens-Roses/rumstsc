@@ -9,6 +9,28 @@ use windows::{
     core::w,
 };
 const UPDATE: u32 = WM_APP + 7;
+pub(super) fn set_private_screen(window: isize, enabled: bool) -> Result<(), String> {
+    unsafe {
+        let window = HWND(window as *mut _);
+        let affinity = if enabled {
+            WDA_EXCLUDEFROMCAPTURE
+        } else {
+            WDA_NONE
+        };
+        SetWindowDisplayAffinity(window, affinity)
+            .map_err(|e| format!("Windows capture exclusion: {e}"))?;
+        let mut actual = 0;
+        if let Err(error) = GetWindowDisplayAffinity(window, &mut actual) {
+            let _ = SetWindowDisplayAffinity(window, WDA_NONE);
+            return Err(format!("Cannot verify capture exclusion: {error}"));
+        }
+        if actual != affinity.0 {
+            let _ = SetWindowDisplayAffinity(window, WDA_NONE);
+            return Err("Windows did not enable the requested capture exclusion".into());
+        }
+        Ok(())
+    }
+}
 struct State {
     shared: Arc<Shared>,
     buffer: Buffer,
@@ -439,6 +461,47 @@ unsafe fn paint_frame(dc: HDC, client: &RECT, buffer: &Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an interactive Windows DWM desktop"]
+    fn private_screen_affinity_enables_and_disables_on_our_own_window() {
+        unsafe {
+            // An unshown, process-owned top-level test window. No user windows
+            // or monitoring software are modified by this integration check.
+            let window = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("rumstsc capture exclusion test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                64,
+                64,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let result = (|| -> Result<(), String> {
+                for enabled in [true, false] {
+                    set_private_screen(window.0 as isize, enabled)?;
+                    let mut actual = 0;
+                    GetWindowDisplayAffinity(window, &mut actual).map_err(|e| e.to_string())?;
+                    assert_eq!(
+                        actual,
+                        if enabled {
+                            WDA_EXCLUDEFROMCAPTURE.0
+                        } else {
+                            WDA_NONE.0
+                        }
+                    );
+                }
+                Ok(())
+            })();
+            let _ = DestroyWindow(window);
+            result.unwrap();
+        }
+    }
     #[test]
     fn server_cursor_resource_preserves_hotspot() {
         unsafe {

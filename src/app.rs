@@ -39,6 +39,8 @@ pub struct Client {
     native: Option<rumstsc_display::Display>,
     first_render: bool,
     settings: Settings,
+    private_screen_active: bool,
+    private_screen_error: Option<String>,
     pub host: Entity<TextField>,
     user: Entity<TextField>,
     domain: Entity<TextField>,
@@ -108,6 +110,17 @@ impl Client {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         let native_parent = None;
+        let mut private_screen_active = false;
+        let mut private_screen_error = None;
+        if settings.private_screen {
+            match native_parent
+                .ok_or_else(|| "Cannot find this application window".to_string())
+                .and_then(|parent| rumstsc_display::set_private_screen(parent, true))
+            {
+                Ok(()) => private_screen_active = true,
+                Err(error) => private_screen_error = Some(error),
+            }
+        }
         let theme = settings.theme;
         let host = cx.new(|cx| {
             TextField::new(
@@ -151,6 +164,8 @@ impl Client {
             native: None,
             first_render: false,
             settings,
+            private_screen_active,
+            private_screen_error,
             host,
             user,
             domain,

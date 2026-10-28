@@ -61,6 +61,22 @@ impl Render for Client {
                 cx.listener(|this, e: &ModifiersChangedEvent, _, _| this.modifiers(e.modifiers)),
             )
             .when(!immersive, |d| d.child(self.header(window, cx)))
+            .when(self.private_screen_error.is_some(), |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .bg(p.panel)
+                        .text_xs()
+                        .text_color(p.error)
+                        .child(format!(
+                            "Private screen is not active: {}",
+                            self.private_screen_error
+                                .as_deref()
+                                .unwrap_or("unavailable")
+                        )),
+                )
+            })
             .child(if self.show_settings {
                 self.preferences(cx)
             } else if active {

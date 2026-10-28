@@ -1,4 +1,4 @@
-name: Build & Publish apt repo
+name: Build installers & publish packages
 
 on:
   push:
@@ -104,11 +104,29 @@ jobs:
           Compress-Archive -Path target/release/rumstsc.exe -DestinationPath "dist/$name" -Force
           Get-ChildItem dist
 
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed" }
+          }
+
+      - name: Build Windows EXE installer
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          ./packaging/windows/build-installer.ps1 -Version $env:APP_VERSION -OutputDirectory dist
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          if-no-files-found: error
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
 
   publish:
     needs: [meta, build-deb, build-windows]
@@ -130,6 +148,8 @@ jobs:
           body: |
             Automated build from `${{ github.sha }}`.
 
+            Windows: download `*-windows-x64-setup.exe` to install, or the ZIP for the portable version.
+
             Install via apt:
             ```sh
             echo "deb [trusted=yes] https://cattens-roses.github.io/rumstsc ./" \
@@ -140,6 +160,7 @@ jobs:
           files: |
             artifacts/deb/*.deb
             artifacts/windows/*.zip
+            artifacts/windows/*-setup.exe
 
       - name: Checkout gh-pages
         uses: actions/checkout@v4
@@ -202,9 +223,9 @@ jobs:
             </style>
           </head>
           <body>
-            <h1>rumstsc — remote desktop client</h1>
+            <h1>rumstsc - remote desktop client</h1>
             <p>Source: <a href="https://github.com/Cattens-Roses/rumstsc">github.com/Cattens-Roses/rumstsc</a></p>
-            <p>GitHub Releases (auto): <a href="https://github.com/Cattens-Roses/rumstsc/releases">releases</a> — continuous builds on <code>main</code>, stable on <code>v*</code> tags.</p>
+            <p>GitHub Releases (auto): <a href="https://github.com/Cattens-Roses/rumstsc/releases">releases</a> - continuous builds on <code>main</code>, stable on <code>v*</code> tags.</p>
 
             <h2>Debian / Ubuntu (apt)</h2>
             <pre>echo "deb [trusted=yes] https://cattens-roses.github.io/rumstsc ./" \

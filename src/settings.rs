@@ -28,6 +28,7 @@ pub struct Settings {
     pub remember_recent: bool,
     pub show_status: bool,
     pub start_fullscreen: bool,
+    pub private_screen: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -41,6 +42,7 @@ impl Default for Settings {
             remember_recent: true,
             show_status: true,
             start_fullscreen: false,
+            private_screen: false,
         }
     }
 }
@@ -88,6 +90,7 @@ impl Settings {
                 "remember_recent=false" => settings.remember_recent = false,
                 "show_status=false" => settings.show_status = false,
                 "start_fullscreen=true" => settings.start_fullscreen = true,
+                "private_screen=true" => settings.private_screen = true,
                 _ => {}
             }
             if line == "display=native" {
@@ -150,6 +153,7 @@ impl Settings {
         data.push_str(&format!("power={}\nbackground_pause={}\nremember_recent={}\nshow_status={}\nstart_fullscreen={}\n",
             match self.power_profile { PowerProfile::Smooth => "smooth", PowerProfile::Balanced => "balanced", PowerProfile::Battery => "battery" },
             self.pause_background, self.remember_recent, self.show_status, self.start_fullscreen));
+        data.push_str(&format!("private_screen={}\n", self.private_screen));
         for host in self.recent.iter().filter(|_| self.remember_recent) {
             if !host.contains(['\n', '\r']) {
                 data.push_str(&format!("host={host}\n"));
@@ -170,7 +174,7 @@ mod tests {
         assert!(settings.theme == Theme::Light && settings.native_display);
         assert_eq!(settings.resolution, 2);
         assert!(settings.pause_background && settings.remember_recent && settings.show_status);
-        assert!(!settings.start_fullscreen);
+        assert!(!settings.start_fullscreen && !settings.private_screen);
         assert!(settings.power_profile == PowerProfile::Smooth);
         let invalid = Settings::parse("resolution=999\npower=unknown\nhost=\n");
         assert_eq!(invalid.resolution, 0);
@@ -188,11 +192,12 @@ mod tests {
             remember_recent: true,
             show_status: false,
             start_fullscreen: true,
+            private_screen: true,
         };
         let encoded = original.encode();
         let mut restored = Settings::parse(&encoded);
         assert!(restored.theme == Theme::Light && restored.power_profile == PowerProfile::Battery);
-        assert!(restored.native_display && restored.start_fullscreen);
+        assert!(restored.native_display && restored.start_fullscreen && restored.private_screen);
         assert!(!restored.pause_background && !restored.show_status);
         assert_eq!(restored.recent, ["office.example"]);
         restored.remember_recent = false;

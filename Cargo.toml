@@ -40,3 +40,8 @@ panic = "abort"
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[[test]]
+name = "private_screen"
+path = "tests/private_screen.rs"
+required-features = ["gui"]

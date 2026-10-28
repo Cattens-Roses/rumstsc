@@ -17,6 +17,72 @@ impl Client {
         }
         cx.notify();
     }
+    fn set_private_screen(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let result = self
+            .native_parent
+            .ok_or_else(|| "Cannot find this application window".to_string())
+            .and_then(|parent| rumstsc_display::set_private_screen(parent, enabled));
+        match result {
+            Ok(()) => {
+                self.private_screen_active = enabled;
+                self.private_screen_error = None;
+                self.settings.private_screen = enabled;
+                self.persist();
+            }
+            Err(error) => {
+                self.private_screen_active = false;
+                self.private_screen_error = Some(error);
+            }
+        }
+        cx.notify();
+    }
+    fn private_screen_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.settings.theme.palette();
+        if !cfg!(windows) {
+            return div().text_xs().text_color(p.muted)
+                .child("Unavailable on Linux/X11/Wayland in this build. No capture protection is active.")
+                .into_any_element();
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().flex().gap_2().children(
+                [(false, "Off"), (true, "On")].into_iter().enumerate().map(
+                    |(i, (enabled, label))| {
+                        choice(
+                            ("private-screen", i),
+                            label,
+                            self.private_screen_active == enabled,
+                            p,
+                        )
+                        .flex_1()
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.set_private_screen(enabled, cx)),
+                        )
+                    },
+                ),
+            ))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(if self.private_screen_active {
+                        "Windows capture exclusion is active for this application window."
+                    } else {
+                        "Capture exclusion is not active."
+                    }),
+            )
+            .when(self.private_screen_error.is_some(), |d| {
+                d.child(
+                    div()
+                        .text_xs()
+                        .text_color(p.error)
+                        .child(self.private_screen_error.clone().unwrap_or_default()),
+                )
+            })
+            .into_any_element()
+    }
     fn preferences_changed(&mut self, cx: &mut Context<Self>) {
         self.persist();
         cx.notify();
@@ -70,6 +136,7 @@ impl Client {
                 .child(div().p_3().rounded_md().bg(p.field).text_xs().text_color(p.muted)
                     .child("Network traffic and protocol decoding continue so remote updates stay correct. For further savings, choose a lower resolution in Display.")),
             SettingsTab::Privacy => section("Privacy & history", "Passwords are never saved. Certificate trust still requires verification.", p)
+                .child(setting("Private screen", "Windows 10 (2004+) / 11: exclude this local window from compatible screenshot and recording APIs. This is not DRM and does not guarantee blocking Veyon, administrator tools, cameras or recording on the remote server.", self.private_screen_control(cx), p))
                 .child(setting("Remember recent computers", "Save up to five successful connection addresses on this device. Turning this off also clears existing history.",
                     choice("remember-recent",if self.settings.remember_recent { "On" } else { "Off" },self.settings.remember_recent,p)
                         .on_click(cx.listener(|this,_,_,cx| { this.settings.remember_recent = !this.settings.remember_recent;

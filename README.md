@@ -36,7 +36,7 @@ Package metadata and install instructions are also published at [cattens-roses.g
 
 ### GitHub Releases
 
-Every push to `main` updates a [continuous prerelease](https://github.com/Cattens-Roses/rumstsc/releases/tag/continuous) with the latest `.deb` and Windows zip. Push a tag `v*` (for example `v0.1.0`) for a stable release with generated notes.
+Every push to `main` updates a [continuous prerelease](https://github.com/Cattens-Roses/rumstsc/releases/tag/continuous) with the latest `.deb`, Windows EXE installer and portable Windows ZIP. Push a tag `v*` (for example `v0.1.0`) for a stable release with generated notes.
 
 ## Build and run
 
@@ -225,3 +225,15 @@ Presentation profiles cap UI refresh at approximately 60, 30 or 15 updates per s
 UI code is separated into connection, desktop, chrome and preferences views under `src/app/`, shared controls in `src/ui.rs`, and persistence in `src/settings.rs`.
 
 Full screen hides the application header and status bar, giving the desktop the complete monitor area. Move to the upper-right 32-pixel corner to reveal the controls; move back into the desktop to hide them. This also works with the native Windows/X11 renderer, without interrupting a remote mouse drag. Ctrl+Alt+Home still releases input and reveals controls; F11 or Escape exits full screen after releasing capture. Native presentation can upscale in full screen while preserving aspect ratio and input coordinates.
+
+### Private screen
+
+Settings > Privacy > Private screen enables Windows `WDA_EXCLUDEFROMCAPTURE` on the process-owned top-level application window, including its embedded desktop. Windows 10 version 2004 or later / Windows 11 is required. The state is read back before the app reports success, failures are shown, and the preference is reapplied at startup. It is disabled by default. Linux/X11/Wayland capture exclusion is unavailable in this build and is explicitly shown as unsupported.
+
+This is local capture exclusion through supported Windows APIs, **not DRM**, and not a guarantee against Veyon, privileged agents, alternative capture paths, cameras, or recording performed on the remote server. It does not disable, modify or detect monitoring software. See [Microsoft's display-affinity documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity). A manual integration test on a process-owned unshown window can be run with `cargo test -p rumstsc-display private_screen_affinity -- --ignored` in an interactive Windows/DWM session.
+
+### Windows installer
+
+Download `rumstsc-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/Cattens-Roses/rumstsc/releases). It installs for the current user without administrator privileges, creates a Start menu shortcut, offers an optional desktop shortcut, and registers an uninstaller. Preferences are retained on uninstall and upgrade. The portable ZIP remains available.
+
+The release workflow builds and uploads both Windows packages on each push to `main`, version tag or manual run. To build the installer locally, install Inno Setup 6, run `cargo build --locked --release --bin rumstsc`, then `./packaging/windows/build-installer.ps1 -Version 0.1.0`. Generated installers go to `dist/`.
