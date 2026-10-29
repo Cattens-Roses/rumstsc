@@ -12,6 +12,18 @@ pub enum Pointer {
     Image(Arc<PointerImage>),
 }
 
+impl Pointer {
+    /// Cached shapes share their allocation. Re-selecting one does not require
+    /// another GPU upload or native cursor allocation.
+    pub fn same_shape(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Default, Self::Default) | (Self::Hidden, Self::Hidden) => true,
+            (Self::Image(a), Self::Image(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PointerImage {
     pub width: u16,
@@ -180,6 +192,15 @@ mod tests {
             panic!()
         };
         assert!(Arc::ptr_eq(&image, &cached));
+        assert!(Pointer::Image(image.clone()).same_shape(&Pointer::Image(cached)));
+        let Pointer::Image(replacement) = decoder.update(&color()).unwrap().unwrap() else {
+            panic!()
+        };
+        assert!(!Pointer::Image(image.clone()).same_shape(&Pointer::Image(replacement)));
+        assert!(!Pointer::Image(image).same_shape(&Pointer::Hidden));
+        assert!(Pointer::Hidden.same_shape(&Pointer::Hidden));
+        assert!(Pointer::Default.same_shape(&Pointer::Default));
+        assert!(!Pointer::Hidden.same_shape(&Pointer::Default));
         assert!(matches!(
             decoder.update(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap(),
             Some(Pointer::Hidden)

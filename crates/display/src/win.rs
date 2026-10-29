@@ -132,11 +132,14 @@ unsafe extern "system" fn procedure(
                     let _ = DestroyWindow(window);
                     return LRESULT(0);
                 }
-                if let Err(error) = state.buffer.receive(&state.shared) {
-                    *state.shared.error.lock().unwrap() = Some(error);
-                    let _ = DestroyWindow(window);
-                    return LRESULT(0);
-                }
+                let dirty = match state.buffer.receive(&state.shared) {
+                    Ok(dirty) => dirty,
+                    Err(error) => {
+                        *state.shared.error.lock().unwrap() = Some(error);
+                        let _ = DestroyWindow(window);
+                        return LRESULT(0);
+                    }
+                };
                 if let Some(pointer) = state.buffer.pointer.take() {
                     match make_cursor(&pointer) {
                         Ok(cursor) => {
@@ -178,7 +181,9 @@ unsafe extern "system" fn procedure(
                     );
                     state.last_bounds = b;
                 }
-                let _ = InvalidateRect(Some(window), None, false);
+                if dirty {
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
                 LRESULT(0)
             }
             WM_SETCURSOR if lparam.0 as u16 == HTCLIENT as u16 => {

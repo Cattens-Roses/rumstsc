@@ -79,6 +79,9 @@ pub struct Client {
     mouse: u16,
     remote_pointer: rumstsc_rdp::pointer::Pointer,
     pointer_image: Option<Arc<RenderImage>>,
+    pointer_dirty: bool,
+    motion: desktop::Motion,
+    framebuffer: Entity<desktop::Framebuffer>,
     _subscriptions: Vec<Subscription>,
 }
 impl Client {
@@ -208,6 +211,9 @@ impl Client {
             mouse: 0,
             remote_pointer: Default::default(),
             pointer_image: None,
+            pointer_dirty: false,
+            motion: desktop::Motion::default(),
+            framebuffer: cx.new(|_| desktop::Framebuffer::default()),
             _subscriptions: vec![blur, activation],
         }
     }
@@ -217,6 +223,11 @@ impl Client {
         }
     }
     fn clear_texture(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
+        self.framebuffer.update(cx, |frame, cx| {
+            frame.key = None;
+            frame.clear();
+            cx.notify();
+        });
         for (_, tile) in std::mem::take(&mut self.tiles) {
             // paint_image caches by image ID. Dropping the Arc alone does not
             // evict its GPU atlas entry, so retired desktop frames need eviction.
@@ -337,10 +348,17 @@ impl Client {
         let Some(c) = &self.connection else {
             return false;
         };
+        self.motion.flush(|input| c.send(input));
         let events: Vec<_> = c.events.try_iter().collect();
         let mut closed = false;
-        let mut changed = false;
+        let mut changed = self.pointer_dirty;
+        self.pointer_dirty = false;
         for event in events {
+            if let Event::Pointer(pointer) = &event
+                && self.remote_pointer.same_shape(pointer)
+            {
+                continue;
+            }
             changed = true;
             match event {
                 Event::ClipboardReady => self.sync_clipboard(None, true, cx),
@@ -364,6 +382,9 @@ impl Client {
                 Event::Security(label) => self.session_security = label,
                 Event::Graphics(label) => self.graphics_mode = label.into(),
                 Event::Pointer(pointer) => {
+                    if let Some(image) = self.pointer_image.take() {
+                        cx.drop_image(image, None);
+                    }
                     self.pointer_image = match &pointer {
                         rumstsc_rdp::pointer::Pointer::Image(image) => image::RgbaImage::from_raw(
                             image.width.into(),
@@ -522,7 +543,7 @@ impl Client {
         if self.active
             && let Some(c) = &self.connection
         {
-            c.send(input);
+            self.motion.send(input, |input| c.send(input));
         }
     }
     fn release_input(&mut self) {
@@ -542,6 +563,7 @@ impl Client {
                 });
             }
         }
+        self.motion = desktop::Motion::default();
         self.mouse = 0;
         self.modifiers = Modifiers::default();
         self.capture = false;

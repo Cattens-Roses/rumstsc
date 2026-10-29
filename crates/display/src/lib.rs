@@ -220,21 +220,24 @@ struct Buffer {
     upscale: bool,
 }
 impl Buffer {
-    fn receive(&mut self, shared: &Shared) -> Result<(), String> {
+    fn receive(&mut self, shared: &Shared) -> Result<bool, String> {
         shared.notified.store(false, Ordering::Release);
         let _span = shared.trace.span("native_tile_apply", "native", 0);
         let mut m = shared.mailbox.lock().unwrap();
+        let mut dirty = self.bounds != m.bounds || self.upscale != m.upscale;
         self.bounds = m.bounds;
         self.upscale = m.upscale;
         if let Some(pointer) = m.pointer.take() {
             self.pointer = Some(pointer);
         }
         if m.resize || (self.width, self.height) != (m.width, m.height) {
+            dirty = true;
             self.width = m.width;
             self.height = m.height;
             self.pixels = vec![0; self.width as usize * self.height as usize * 4];
             m.resize = false;
         }
+        dirty |= !m.tiles.is_empty();
         let tiles = std::mem::take(&mut m.tiles);
         drop(m);
         for (_, tile) in tiles {
@@ -251,7 +254,7 @@ impl Buffer {
                 self.pixels[dst..dst + count].copy_from_slice(&tile.bgra[src..src + count]);
             }
         }
-        Ok(())
+        Ok(dirty)
     }
     fn viewport(&self) -> Bounds {
         if self.width == 0 || self.height == 0 || self.bounds.width == 0 || self.bounds.height == 0
@@ -469,6 +472,29 @@ mod tests {
                 bgra: vec![color, 0, 0, 255],
             }],
         }
+    }
+    #[test]
+    fn cursor_only_updates_do_not_repaint_the_framebuffer() {
+        let state = shared();
+        let display = Display {
+            handle: Handle(state.clone()),
+        };
+        display.submit(snapshot(1, 1, 0, 7));
+        let mut buffer = Buffer::default();
+        assert!(buffer.receive(&state).unwrap());
+        let pixels = buffer.pixels.clone();
+        for _ in 0..1000 {
+            display.pointer(Pointer::Hidden);
+            assert!(!buffer.receive(&state).unwrap());
+            assert!(matches!(buffer.pointer.take(), Some(Pointer::Hidden)));
+        }
+        assert_eq!(pixels, buffer.pixels);
+        display.handle().upscale(true);
+        assert!(buffer.receive(&state).unwrap());
+        assert!(!buffer.receive(&state).unwrap());
+        display.submit(snapshot(1, 2, 0, 9));
+        assert!(buffer.receive(&state).unwrap());
+        assert_eq!(buffer.pixels[0], 9);
     }
     #[test]
     fn skipped_presentations_merge_every_changed_tile() {

@@ -128,7 +128,13 @@ The preparation script unpacks the distro package under ignored `.interop/`, wit
 - `.github/workflows/ci.yml`: core tests on Linux/Windows, Linux GUI build.
 - `.github/workflows/release.yml`: builds the `.deb` and publishes the apt repo to GitHub Pages.
 
-The network worker and graphics decoder run on separate threads. A bounded queue holds at most eight ordered bitmap updates; it applies backpressure instead of dropping incremental updates. Snapshot copies also run on the graphics worker, and the UI consumes completed snapshots without taking the framebuffer lock. Frame updates are coalesced into a shared framebuffer; the UI checks for changes every 16 ms and uploads only modified 128 x 128 pixel tiles, skips a busy decoder instead of blocking, and evicts retired GPU images. Per-tile revisions preserve changes across skipped ticks, and framebuffer generations invalidate the tile cache after server reactivation or resizing. The release profile uses thin LTO, a single codegen unit, stripped symbols and abort-on-panic. The application does not poll while disconnected.
+The network worker and graphics decoder run on separate threads. A bounded queue holds at most eight ordered bitmap updates; it applies backpressure instead of dropping incremental updates. Snapshot copies also run on the graphics worker, and the UI consumes completed snapshots without taking the framebuffer lock. Frame updates are coalesced into a shared framebuffer; the UI checks for changes at the selected presentation cadence and uploads only modified 128 x 128 pixel tiles, skips a busy decoder instead of blocking, and evicts retired GPU images. Per-tile revisions preserve changes across skipped ticks, and framebuffer generations invalidate the tile cache after server reactivation or resizing. The GPUI desktop is a separately cached view: moving a software cursor reuses the desktop scene instead of rebuilding its tiles. Cursor redraws and outgoing motion are coalesced at the selected presentation cadence (17/34/67 ms); clicks, wheel and keyboard input first flush the latest position to retain ordering. Repeated moves to the same remote pixel and repeated cached cursor selections do no additional work. Native Windows/X11 cursor updates do not invalidate the framebuffer. A manual GPU regression test checks that 25 cursor-only redraws reuse the desktop, while a new frame and resized bounds still repaint:
+
+```sh
+cargo test --bin rumstsc cursor_redraw_reuses -- --ignored --test-threads=1
+```
+
+The release profile uses thin LTO, a single codegen unit, stripped symbols and abort-on-panic. The application does not poll while disconnected.
 
 
 ## Graphics throughput

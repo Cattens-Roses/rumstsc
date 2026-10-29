@@ -247,8 +247,7 @@ fn run_inner(
             let event = connection.wait_for_event()?;
             match event {
                 Event::ClientMessage(event) if event.type_ == atom => {
-                    buffer.receive(&shared)?;
-                    repaint = true;
+                    repaint |= buffer.receive(&shared)?;
                 }
                 Event::Expose(_) => {
                     if let Some((id, w, h)) = pixmap {
