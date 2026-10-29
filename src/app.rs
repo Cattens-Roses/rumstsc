@@ -79,7 +79,6 @@ pub struct Client {
     mouse: u16,
     remote_pointer: rumstsc_rdp::pointer::Pointer,
     pointer_image: Option<Arc<RenderImage>>,
-    pointer_dirty: bool,
     motion: desktop::Motion,
     framebuffer: Entity<desktop::Framebuffer>,
     _subscriptions: Vec<Subscription>,
@@ -213,7 +212,6 @@ impl Client {
             mouse: 0,
             remote_pointer: Default::default(),
             pointer_image: None,
-            pointer_dirty: false,
             motion: desktop::Motion::default(),
             framebuffer: cx.new(|_| desktop::Framebuffer::default()),
             _subscriptions: vec![blur, activation],
@@ -353,8 +351,7 @@ impl Client {
         self.motion.flush(|input| c.send(input));
         let events: Vec<_> = c.events.try_iter().collect();
         let mut closed = false;
-        let mut changed = self.pointer_dirty;
-        self.pointer_dirty = false;
+        let mut changed = false;
         for event in events {
             if let Event::Pointer(pointer) = &event
                 && self.remote_pointer.same_shape(pointer)

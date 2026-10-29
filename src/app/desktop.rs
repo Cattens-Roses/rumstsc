@@ -176,10 +176,13 @@ impl Client {
                     this.pointer(e.position, 0xc000);
                 }),
             )
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| {
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
                 this.pointer(e.position, 0x0800);
                 if this.pointer_image.is_some() {
-                    this.pointer_dirty = true;
+                    // Follow the local mouse on the next display frame, even
+                    // when desktop/network polling uses a battery-saving rate.
+                    // The separately cached framebuffer is reused unchanged.
+                    cx.notify();
                 }
             }));
         for (button, flag) in [
