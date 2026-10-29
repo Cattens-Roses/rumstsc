@@ -1,19 +1,4 @@
 Package: rumstsc
-Version: 0.1.0.11+git.1e6eefb
-Architecture: amd64
-Maintainer: Cattens-Roses <https://github.com/Cattens-Roses/rumstsc>
-Depends: libfontconfig1, libfreetype6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libxcb1, libx11-xcb1, libssl3, libvulkan1, libavcodec60 | libavcodec61 | libavcodec58, libavutil58 | libavutil59 | libavutil56, libswscale7 | libswscale8 | libswscale5
-Filename: pool/main/rumstsc_0.1.0.11+git.1e6eefb_amd64.deb
-Size: 5311406
-MD5sum: b9e2c0134c4c0f4bc73a608c68c2b228
-SHA1: 207b69d71f4ab76ccf045b4281a6660b57e35c13
-SHA256: c0157523ea281974a15433e9778ca5a00fb88b147bd98b49b059f57d8f76b81f
-Section: net
-Priority: optional
-Description: Minimal experimental RDP client
- Native Rust + GPUI remote desktop client with an independent RDP engine.
-
-Package: rumstsc
 Version: 0.1.0.12+git.966faa9
 Architecture: amd64
 Maintainer: Cattens-Roses <https://github.com/Cattens-Roses/rumstsc>
@@ -68,6 +53,21 @@ Size: 5327172
 MD5sum: aab68d098a6a2192eac3c7499f1dc832
 SHA1: 16a78a1ad8e1dc6b7779fbffc7e7be55c7fd3c8e
 SHA256: df1d219370d1126c4f7f2c188d68c5bea8040ff29a3a67c45136a5c288cb727f
+Section: net
+Priority: optional
+Description: Minimal experimental RDP client
+ Native Rust + GPUI remote desktop client with an independent RDP engine.
+
+Package: rumstsc
+Version: 0.1.0.16+git.c08673f
+Architecture: amd64
+Maintainer: Cattens-Roses <https://github.com/Cattens-Roses/rumstsc>
+Depends: libfontconfig1, libfreetype6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libxcb1, libx11-xcb1, libssl3, libvulkan1, libavcodec60 | libavcodec61 | libavcodec58, libavutil58 | libavutil59 | libavutil56, libswscale7 | libswscale8 | libswscale5
+Filename: pool/main/rumstsc_0.1.0.16+git.c08673f_amd64.deb
+Size: 5326736
+MD5sum: 7bb1d9541876f88d14c5f06003feac07
+SHA1: c76cc0d46fdec3c0f201b9a675dd5c1f75d7d12c
+SHA256: bb6985338fc4d427232f1adca1a6857ae531bbc27c783b4d89c3739eb6011ac8
 Section: net
 Priority: optional
 Description: Minimal experimental RDP client
