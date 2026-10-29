@@ -104,8 +104,10 @@ impl Client {
                 _ => None,
             });
         #[cfg(target_os = "linux")]
-        let native_parent = std::env::var_os("DISPLAY")
-            .map(|_| rumstsc_display::Parent::X11Process(std::process::id()));
+        // Wayland sessions can also export DISPLAY for XWayland. Only search
+        // X11 for our parent when GPUI actually created an X11 window.
+        let native_parent = (cx.compositor_name() == "X11")
+            .then(|| rumstsc_display::Parent::X11Process(std::process::id()));
         #[cfg(target_os = "linux")]
         if native_parent.is_some()
             && let Err(error) = rumstsc_display::set_application_icon(
@@ -533,6 +535,9 @@ impl Client {
         }
         if presenting && let Some(connection) = &self.connection {
             connection.request_snapshot(self.frame_generation, self.revision);
+        }
+        if self.active && self.native.is_none() {
+            self.sync_framebuffer(cx);
         }
         if changed {
             cx.notify();

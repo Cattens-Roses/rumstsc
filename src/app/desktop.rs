@@ -11,6 +11,7 @@ pub(super) struct Framebuffer {
     paints: Arc<std::sync::atomic::AtomicUsize>,
 }
 fn fit(bounds: Bounds<Pixels>, width: u16, height: u16) -> Bounds<Pixels> {
+    let (width, height) = (width.max(1), height.max(1));
     let scale = (bounds.size.width / px(width as f32)).min(bounds.size.height / px(height as f32));
     let sz = size(px(width as f32 * scale), px(height as f32 * scale));
     Bounds::new(
@@ -40,7 +41,7 @@ impl Render for Framebuffer {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let frame_tiles = self.tiles.clone();
         let self_trace = self.trace.clone();
-        let frame_first_paint = self.first_paint.clone().unwrap();
+        let frame_first_paint = self.first_paint.clone();
         let (width, height) = self.desktop;
         #[cfg(test)]
         let paints = self.paints.clone();
@@ -69,7 +70,8 @@ impl Render for Framebuffer {
                         window.paint_image(tile_bounds, Corners::default(), tile.image, 0, false);
                 }
                 if has_frame_tiles
-                    && !frame_first_paint.swap(true, Ordering::Relaxed)
+                    && let Some(first_paint) = &frame_first_paint
+                    && !first_paint.swap(true, Ordering::Relaxed)
                     && let Some(self_trace) = &self_trace
                 {
                     self_trace.mark("first_frame_submitted", "ui", 0);
@@ -81,6 +83,22 @@ impl Render for Framebuffer {
 }
 
 impl Client {
+    // Invalidate the cached child while processing updates, before GPUI starts
+    // drawing. Notifying it from the parent's render is too late: that frame
+    // may reuse atlas tiles already evicted by the snapshot update.
+    pub(super) fn sync_framebuffer(&self, cx: &mut Context<Self>) {
+        let key = (self.frame_generation, self.revision, self.tiles.len());
+        self.framebuffer.update(cx, |frame, cx| {
+            if frame.key != Some(key) {
+                frame.key = Some(key);
+                frame.tiles = self.tiles.values().cloned().collect();
+                frame.desktop = self.desktop;
+                frame.trace = self.connection.as_ref().map(|c| c.trace.clone());
+                frame.first_paint = Some(self.first_paint.clone());
+                cx.notify();
+            }
+        });
+    }
     pub(super) fn remote(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(display) = &self.native {
             let display = display.handle();
@@ -112,17 +130,6 @@ impl Client {
                 )
                 .into_any_element();
         }
-        let key = (self.frame_generation, self.revision, self.tiles.len());
-        self.framebuffer.update(cx, |frame, cx| {
-            if frame.key != Some(key) {
-                frame.key = Some(key);
-                frame.tiles = self.tiles.values().cloned().collect();
-                frame.desktop = self.desktop;
-                frame.trace = self.connection.as_ref().map(|c| c.trace.clone());
-                frame.first_paint = Some(self.first_paint.clone());
-                cx.notify();
-            }
-        });
         let (width, height) = self.desktop;
         let entity = cx.entity();
         let has_image = !self.tiles.is_empty();
@@ -472,9 +479,11 @@ mod gpu_tests {
     struct Harness {
         frame: Entity<Framebuffer>,
         width: f32,
+        renders: Arc<AtomicUsize>,
     }
     impl Render for Harness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.fetch_add(1, Ordering::Relaxed);
             div()
                 .relative()
                 .w(px(self.width))
@@ -488,6 +497,8 @@ mod gpu_tests {
     fn cursor_redraw_reuses_desktop_but_new_frames_and_resize_repaint() {
         let paints = Arc::new(AtomicUsize::new(0));
         let output = paints.clone();
+        let renders = Arc::new(AtomicUsize::new(0));
+        let root_renders = renders.clone();
         Application::new().run(move |cx| {
             let window = cx
                 .open_window(
@@ -523,37 +534,79 @@ mod gpu_tests {
                             paints,
                             ..Default::default()
                         });
-                        cx.new(|_| Harness { frame, width: 320. })
+                        cx.new(|_| Harness {
+                            frame,
+                            width: 320.,
+                            renders,
+                        })
                     },
                 )
                 .unwrap();
             cx.spawn(async move |cx| {
                 Timer::after(std::time::Duration::from_millis(250)).await;
+                let view = window.update(cx, |_, _, cx| cx.entity()).unwrap();
                 let initial = output.load(Ordering::Relaxed);
+                let roots = root_renders.load(Ordering::Relaxed);
                 assert!(initial > 0, "desktop must actually be painted");
                 for _ in 0..25 {
-                    window.update(cx, |_, _, cx| cx.notify()).unwrap();
+                    cx.update(|cx| view.update(cx, |_, cx| cx.notify()))
+                        .unwrap();
                     Timer::after(std::time::Duration::from_millis(20)).await;
                 }
                 let reused = output.load(Ordering::Relaxed);
+                assert!(
+                    root_renders.load(Ordering::Relaxed) > roots,
+                    "cursor redraws must actually render the parent"
+                );
                 assert_eq!(reused, initial, "cursor-only redraws repainted desktop");
-                window
-                    .update(cx, |view, _, cx| {
+                cx.update(|cx| {
+                    view.update(cx, |view, cx| {
                         view.frame.update(cx, |_, cx| cx.notify());
+                        cx.notify();
                     })
-                    .unwrap();
+                })
+                .unwrap();
                 Timer::after(std::time::Duration::from_millis(100)).await;
                 let updated = output.load(Ordering::Relaxed);
                 assert!(updated > reused, "a changed desktop must repaint");
-                window
-                    .update(cx, |view, _, cx| {
+                for index in 0..30 {
+                    cx.update(|cx| {
+                        view.update(cx, |view, cx| {
+                            let retired = view.frame.update(cx, |frame, cx| {
+                                let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+                                    image::RgbaImage::from_pixel(
+                                        1920,
+                                        1080,
+                                        image::Rgba([index, 40, 80, 255]),
+                                    ),
+                                )]));
+                                let retired = std::mem::replace(&mut frame.tiles[0].image, image);
+                                // Same order as snapshot processing: notify the cached
+                                // view before the next draw, outside parent render.
+                                cx.notify();
+                                retired
+                            });
+                            // Keep the window in App.windows, as in the network poll,
+                            // so this really evicts the atlas texture on Linux.
+                            cx.drop_image(retired, None);
+                            cx.notify();
+                        });
+                    })
+                    .unwrap();
+                    Timer::after(std::time::Duration::from_millis(30)).await;
+                }
+                let replaced = output.load(Ordering::Relaxed);
+                assert!(replaced >= updated + 30, "replacement frames must repaint");
+                cx.update(|cx| {
+                    view.update(cx, |view, cx| {
                         view.width = 280.;
                         cx.notify();
                     })
-                    .unwrap();
+                })
+                .unwrap();
                 Timer::after(std::time::Duration::from_millis(100)).await;
                 assert!(
-                    output.load(Ordering::Relaxed) > updated,
+                    output.load(Ordering::Relaxed) > replaced,
                     "resizing must repaint cached desktop"
                 );
                 cx.update(|cx| cx.quit()).unwrap();
