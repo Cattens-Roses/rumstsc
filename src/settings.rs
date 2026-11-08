@@ -24,6 +24,7 @@ pub struct Settings {
     pub resolution: usize,
     pub native_display: bool,
     pub power_profile: PowerProfile,
+    pub mouse_render_optimization: bool,
     pub pause_background: bool,
     pub remember_recent: bool,
     pub show_status: bool,
@@ -39,6 +40,7 @@ impl Default for Settings {
             resolution: 0,
             native_display: false,
             power_profile: PowerProfile::Smooth,
+            mouse_render_optimization: true,
             pause_background: true,
             remember_recent: true,
             show_status: true,
@@ -94,6 +96,7 @@ impl Settings {
                 "start_fullscreen=true" => settings.start_fullscreen = true,
                 "private_screen=true" => settings.private_screen = true,
                 "clipboard=false" => settings.clipboard = false,
+                "mouse_render_optimization=false" => settings.mouse_render_optimization = false,
                 _ => {}
             }
             if line == "display=native" {
@@ -157,8 +160,8 @@ impl Settings {
             match self.power_profile { PowerProfile::Smooth => "smooth", PowerProfile::Balanced => "balanced", PowerProfile::Battery => "battery" },
             self.pause_background, self.remember_recent, self.show_status, self.start_fullscreen));
         data.push_str(&format!(
-            "private_screen={}\nclipboard={}\n",
-            self.private_screen, self.clipboard
+            "private_screen={}\nclipboard={}\nmouse_render_optimization={}\n",
+            self.private_screen, self.clipboard, self.mouse_render_optimization
         ));
         for host in self.recent.iter().filter(|_| self.remember_recent) {
             if !host.contains(['\n', '\r']) {
@@ -182,6 +185,7 @@ mod tests {
         assert!(settings.pause_background && settings.remember_recent && settings.show_status);
         assert!(!settings.start_fullscreen && !settings.private_screen);
         assert!(settings.power_profile == PowerProfile::Smooth);
+        assert!(settings.mouse_render_optimization);
         let invalid = Settings::parse("resolution=999\npower=unknown\nhost=\n");
         assert_eq!(invalid.resolution, 0);
         assert!(invalid.recent.is_empty());
@@ -194,6 +198,7 @@ mod tests {
             resolution: 2,
             native_display: true,
             power_profile: PowerProfile::Battery,
+            mouse_render_optimization: false,
             pause_background: false,
             remember_recent: true,
             show_status: false,
@@ -205,7 +210,7 @@ mod tests {
         let mut restored = Settings::parse(&encoded);
         assert!(restored.theme == Theme::Light && restored.power_profile == PowerProfile::Battery);
         assert!(restored.native_display && restored.start_fullscreen && restored.private_screen);
-        assert!(!restored.clipboard);
+        assert!(!restored.clipboard && !restored.mouse_render_optimization);
         assert!(!restored.pause_background && !restored.show_status);
         assert_eq!(restored.recent, ["office.example"]);
         restored.remember_recent = false;

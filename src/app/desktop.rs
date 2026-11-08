@@ -33,6 +33,17 @@ impl Framebuffer {
             ..Default::default()
         })
     }
+    fn presentation(entity: Entity<Self>, optimized: bool) -> AnyElement {
+        if optimized {
+            Self::cached(entity).into_any_element()
+        } else {
+            div()
+                .absolute()
+                .size_full()
+                .child(entity)
+                .into_any_element()
+        }
+    }
     pub(super) fn clear(&mut self) {
         self.tiles.clear();
     }
@@ -216,7 +227,10 @@ impl Client {
                 };
                 this.pointer(e.position, flags);
             }))
-            .child(Framebuffer::cached(self.framebuffer.clone()))
+            .child(Framebuffer::presentation(
+                self.framebuffer.clone(),
+                self.settings.mouse_render_optimization,
+            ))
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -276,6 +290,15 @@ pub(super) struct Motion {
     last: std::cell::Cell<Option<(u16, u16)>>,
 }
 impl Motion {
+    pub(super) fn dispatch(&self, input: Input, optimized: bool, mut emit: impl FnMut(Input)) {
+        if optimized {
+            self.send(input, emit);
+        } else {
+            self.flush(&mut emit);
+            self.last.set(None);
+            emit(input);
+        }
+    }
     pub(super) fn send(&self, input: Input, mut emit: impl FnMut(Input)) {
         if let Input::Mouse {
             x,
@@ -383,6 +406,77 @@ mod tests {
         ));
     }
     #[test]
+    fn switching_optimization_preserves_pending_input_and_immediate_moves() {
+        let motion = Motion::default();
+        let mut sent = Vec::new();
+        motion.dispatch(
+            Input::Mouse {
+                x: 1,
+                y: 2,
+                flags: 0x0800,
+            },
+            true,
+            |i| sent.push(i),
+        );
+        assert!(sent.is_empty());
+        motion.dispatch(
+            Input::Mouse {
+                x: 3,
+                y: 4,
+                flags: 0x0800,
+            },
+            false,
+            |i| sent.push(i),
+        );
+        motion.dispatch(
+            Input::Mouse {
+                x: 3,
+                y: 4,
+                flags: 0x0800,
+            },
+            false,
+            |i| sent.push(i),
+        );
+        assert!(matches!(
+            sent.as_slice(),
+            [
+                Input::Mouse { x: 1, .. },
+                Input::Mouse { x: 3, .. },
+                Input::Mouse { x: 3, .. }
+            ]
+        ));
+        motion.dispatch(
+            Input::Mouse {
+                x: 5,
+                y: 6,
+                flags: 0x0800,
+            },
+            true,
+            |i| sent.push(i),
+        );
+        assert_eq!(sent.len(), 3);
+        motion.dispatch(
+            Input::Mouse {
+                x: 5,
+                y: 6,
+                flags: 0x9000,
+            },
+            true,
+            |i| sent.push(i),
+        );
+        assert!(matches!(
+            &sent[3..],
+            [
+                Input::Mouse {
+                    x: 5,
+                    flags: 0x0800,
+                    ..
+                },
+                Input::Mouse { flags: 0x9000, .. }
+            ]
+        ));
+    }
+    #[test]
     fn motion_is_flushed_before_click_drag_release_and_keyboard() {
         let motion = Motion::default();
         let mut sent = Vec::new();
@@ -483,6 +577,7 @@ mod gpu_tests {
         frame: Entity<Framebuffer>,
         width: f32,
         renders: Arc<AtomicUsize>,
+        optimized: bool,
     }
     impl Render for Harness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -491,7 +586,10 @@ mod gpu_tests {
                 .relative()
                 .w(px(self.width))
                 .h(px(180.))
-                .child(Framebuffer::cached(self.frame.clone()))
+                .child(Framebuffer::presentation(
+                    self.frame.clone(),
+                    self.optimized,
+                ))
                 .child(div().absolute().w(px(12.)).h(px(12.)).bg(rgb(0xffffff)))
         }
     }
@@ -541,6 +639,7 @@ mod gpu_tests {
                             frame,
                             width: 320.,
                             renders,
+                            optimized: true,
                         })
                     },
                 )
@@ -611,6 +710,43 @@ mod gpu_tests {
                 assert!(
                     output.load(Ordering::Relaxed) > replaced,
                     "resizing must repaint cached desktop"
+                );
+                cx.update(|cx| {
+                    view.update(cx, |view, cx| {
+                        view.optimized = false;
+                        cx.notify();
+                    })
+                })
+                .unwrap();
+                Timer::after(std::time::Duration::from_millis(100)).await;
+                let uncached = output.load(Ordering::Relaxed);
+                for _ in 0..5 {
+                    cx.update(|cx| view.update(cx, |_, cx| cx.notify()))
+                        .unwrap();
+                    Timer::after(std::time::Duration::from_millis(30)).await;
+                }
+                assert!(
+                    output.load(Ordering::Relaxed) > uncached,
+                    "turning optimization off must repaint desktop on cursor redraws"
+                );
+                cx.update(|cx| {
+                    view.update(cx, |view, cx| {
+                        view.optimized = true;
+                        cx.notify();
+                    })
+                })
+                .unwrap();
+                Timer::after(std::time::Duration::from_millis(100)).await;
+                let cached_again = output.load(Ordering::Relaxed);
+                for _ in 0..5 {
+                    cx.update(|cx| view.update(cx, |_, cx| cx.notify()))
+                        .unwrap();
+                    Timer::after(std::time::Duration::from_millis(30)).await;
+                }
+                assert_eq!(
+                    output.load(Ordering::Relaxed),
+                    cached_again,
+                    "turning optimization on must restore scene reuse"
                 );
                 cx.update(|cx| cx.quit()).unwrap();
             })

@@ -87,6 +87,13 @@ impl Client {
         self.persist();
         cx.notify();
     }
+    fn toggle_mouse_render_optimization(&mut self, cx: &mut Context<Self>) {
+        if let Some(connection) = &self.connection {
+            self.motion.flush(|input| connection.send(input));
+        }
+        self.settings.mouse_render_optimization = !self.settings.mouse_render_optimization;
+        self.preferences_changed(cx);
+    }
     pub(super) fn presentation_interval(&self) -> Duration {
         if self.show_settings || (!self.window_active && self.settings.pause_background) {
             Duration::from_millis(200)
@@ -130,6 +137,9 @@ impl Client {
                     ].into_iter().enumerate().map(|(i,(profile,label))|
                         choice(("power",i),label,self.settings.power_profile==profile,p)
                             .on_click(cx.listener(move |this,_,_,cx| { this.settings.power_profile=profile; this.preferences_changed(cx); })))),p))
+                .child(setting("Mouse & rendering optimization", "Cache the GPUI desktop and combine outgoing mouse movements. Off redraws the desktop and sends every movement immediately. Applies immediately to the GPUI renderer.",
+                    choice("mouse-render-optimization", if self.settings.mouse_render_optimization { "On" } else { "Off" }, self.settings.mouse_render_optimization,p)
+                        .on_click(cx.listener(|this,_,_,cx| this.toggle_mouse_render_optimization(cx))),p))
                 .child(setting("Pause presentation in the background", "Stop desktop uploads and painting while this window is unfocused. The session remains connected.",
                     choice("pause-background",if self.settings.pause_background { "On" } else { "Off" },self.settings.pause_background,p)
                         .on_click(cx.listener(|this,_,_,cx| { this.settings.pause_background = !this.settings.pause_background; this.preferences_changed(cx); })),p))

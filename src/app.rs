@@ -545,7 +545,10 @@ impl Client {
         if self.active
             && let Some(c) = &self.connection
         {
-            self.motion.send(input, |input| c.send(input));
+            self.motion
+                .dispatch(input, self.settings.mouse_render_optimization, |input| {
+                    c.send(input)
+                });
         }
     }
     fn release_input(&mut self) {
