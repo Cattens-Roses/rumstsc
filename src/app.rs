@@ -79,6 +79,7 @@ pub struct Client {
     mouse: u16,
     remote_pointer: rumstsc_rdp::pointer::Pointer,
     pointer_image: Option<Arc<RenderImage>>,
+    system_cursor: Option<Arc<CustomCursor>>,
     motion: desktop::Motion,
     framebuffer: Entity<desktop::Framebuffer>,
     _subscriptions: Vec<Subscription>,
@@ -212,6 +213,7 @@ impl Client {
             mouse: 0,
             remote_pointer: Default::default(),
             pointer_image: None,
+            system_cursor: None,
             motion: desktop::Motion::default(),
             framebuffer: cx.new(|_| desktop::Framebuffer::default()),
             _subscriptions: vec![blur, activation],
@@ -220,6 +222,13 @@ impl Client {
     fn persist(&mut self) {
         if let Err(e) = self.settings.save() {
             self.error = Some(format!("Could not save preferences: {e}"));
+        }
+    }
+    fn clear_pointer(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        self.remote_pointer = Default::default();
+        self.system_cursor = None;
+        if let Some(image) = self.pointer_image.take() {
+            cx.drop_image(image, window);
         }
     }
     fn clear_texture(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -293,8 +302,7 @@ impl Client {
         match Connection::start_interactive_traced(options, Settings::trace_path()) {
             Ok(connection) => {
                 self.password.update(cx, |f, cx| f.set(String::new(), cx));
-                self.remote_pointer = Default::default();
-                self.pointer_image = None;
+                self.clear_pointer(Some(&mut *window), cx);
                 self.connection = Some(connection);
                 self.error = None;
                 self.certificate_review = None;
@@ -384,13 +392,38 @@ impl Client {
                     if let Some(image) = self.pointer_image.take() {
                         cx.drop_image(image, None);
                     }
+                    self.system_cursor = match &pointer {
+                        rumstsc_rdp::pointer::Pointer::Image(image)
+                            if cfg!(any(windows, target_os = "linux")) =>
+                        {
+                            CustomCursor::new(
+                                image.width,
+                                image.height,
+                                image.hot_x,
+                                image.hot_y,
+                                image.bgra.clone(),
+                                image.invert.clone(),
+                            )
+                            .map_err(|error| eprintln!("System cursor unavailable: {error}"))
+                            .ok()
+                        }
+                        _ => None,
+                    };
+                    // Only allocate/upload a GPUI image if native creation failed
+                    // or the platform does not implement bitmap cursors.
                     self.pointer_image = match &pointer {
-                        rumstsc_rdp::pointer::Pointer::Image(image) => image::RgbaImage::from_raw(
-                            image.width.into(),
-                            image.height.into(),
-                            image.bgra.clone(),
-                        )
-                        .map(|pixels| Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))),
+                        rumstsc_rdp::pointer::Pointer::Image(image)
+                            if self.system_cursor.is_none() =>
+                        {
+                            image::RgbaImage::from_raw(
+                                image.width.into(),
+                                image.height.into(),
+                                image.bgra.clone(),
+                            )
+                            .map(|pixels| {
+                                Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+                            })
+                        }
                         _ => None,
                     };
                     if let Some(display) = &self.native {
@@ -444,6 +477,7 @@ impl Client {
         }
         if closed {
             self.release_input();
+            self.clear_pointer(None, cx);
             self.native = None;
             self.connection = None;
             self.certificate_review = None;
@@ -577,8 +611,7 @@ impl Client {
         self.release_input();
         self.poll_task = None;
         self.native = None;
-        self.remote_pointer = Default::default();
-        self.pointer_image = None;
+        self.clear_pointer(Some(&mut *window), cx);
         self.connection = None;
         self.certificate_review = None;
         self.active = false;

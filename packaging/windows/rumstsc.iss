@@ -41,6 +41,7 @@ Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "
 [Files]
 Source: "{#BinaryPath}"; DestDir: "{app}"; DestName: "rumstsc.exe"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "{#RepoRoot}\vendor\gpui\LICENSE-APACHE"; DestDir: "{app}\licenses"; DestName: "gpui-LICENSE-APACHE.txt"; Flags: ignoreversion
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

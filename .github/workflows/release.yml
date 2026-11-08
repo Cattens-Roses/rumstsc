@@ -101,7 +101,7 @@ jobs:
           $name = "rumstsc-${{ needs.meta.outputs.version }}-windows-x64.zip"
           # '+' is awkward in some downloaders; keep the cargo/deb version elsewhere.
           $name = $name -replace '\+','-'
-          Compress-Archive -Path target/release/rumstsc.exe -DestinationPath "dist/$name" -Force
+          Compress-Archive -Path target/release/rumstsc.exe, vendor/gpui/LICENSE-APACHE -DestinationPath "dist/$name" -Force
           Get-ChildItem dist
 
       - name: Ensure Inno Setup is available

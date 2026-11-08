@@ -27,6 +27,7 @@ for size in 16 24 32 48 64 128 256 512; do
   install -Dm 0644 "$repo_root/assets/icons/${size}x${size}/rumstsc.png" "$debroot/usr/share/icons/hicolor/${size}x${size}/apps/rumstsc.png"
 done
 install -m 0644 "$repo_root/LICENSE" "$debroot/usr/share/doc/rumstsc/copyright"
+install -m 0644 "$repo_root/vendor/gpui/LICENSE-APACHE" "$debroot/usr/share/doc/rumstsc/gpui-LICENSE-APACHE"
 install -m 0644 "$repo_root/README.md" "$debroot/usr/share/doc/rumstsc/README.md"
 
 cat > "$debroot/DEBIAN/control" <<EOF

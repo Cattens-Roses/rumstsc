@@ -9,6 +9,7 @@ default-run = "rumstsc"
 [workspace]
 members = ["crates/rdp", "crates/video", "crates/display"]
 resolver = "3"
+exclude = ["vendor/gpui"]
 
 [features]
 default = ["gui"]
@@ -45,3 +46,6 @@ embed-resource = "3.0.12"
 name = "private_screen"
 path = "tests/private_screen.rs"
 required-features = ["gui"]
+
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }

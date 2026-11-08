@@ -137,7 +137,7 @@ impl Client {
                     ].into_iter().enumerate().map(|(i,(profile,label))|
                         choice(("power",i),label,self.settings.power_profile==profile,p)
                             .on_click(cx.listener(move |this,_,_,cx| { this.settings.power_profile=profile; this.preferences_changed(cx); })))),p))
-                .child(setting("Mouse & rendering optimization", "Cache the GPUI desktop and combine outgoing mouse movements. Off redraws the desktop and sends every movement immediately. Applies immediately to the GPUI renderer.",
+                .child(setting("Mouse & rendering optimization", "Cache the GPUI desktop and combine outgoing mouse movements. Off disables the cache and sends every movement immediately. System cursors work in both modes. Applies immediately to the GPUI renderer.",
                     choice("mouse-render-optimization", if self.settings.mouse_render_optimization { "On" } else { "Off" }, self.settings.mouse_render_optimization,p)
                         .on_click(cx.listener(|this,_,_,cx| this.toggle_mouse_render_optimization(cx))),p))
                 .child(setting("Pause presentation in the background", "Stop desktop uploads and painting while this window is unfocused. The session remains connected.",

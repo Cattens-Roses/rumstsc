@@ -149,13 +149,13 @@ impl Client {
         let mut desktop = div()
             .id("desktop")
             .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
-            .cursor(
-                if matches!(self.remote_pointer, rumstsc_rdp::pointer::Pointer::Default) {
-                    CursorStyle::Arrow
-                } else {
-                    CursorStyle::None
-                },
-            )
+            .cursor(if let Some(cursor) = &self.system_cursor {
+                cursor.style()
+            } else if matches!(self.remote_pointer, rumstsc_rdp::pointer::Pointer::Default) {
+                CursorStyle::Arrow
+            } else {
+                CursorStyle::None
+            })
             .flex_1()
             .min_h_0()
             .w_full()
@@ -326,6 +326,22 @@ impl Motion {
 #[cfg(test)]
 mod tests {
     use super::{Input, Motion};
+    #[test]
+    fn system_cursor_validates_untrusted_server_shape_and_retains_style_owner() {
+        assert!(gpui::CustomCursor::new(0, 1, 0, 0, vec![], vec![]).is_err());
+        assert!(gpui::CustomCursor::new(257, 1, 0, 0, vec![0; 257 * 4], vec![false; 257]).is_err());
+        assert!(gpui::CustomCursor::new(2, 2, 2, 0, vec![0; 16], vec![false; 4]).is_err());
+        assert!(gpui::CustomCursor::new(2, 2, 0, 0, vec![0; 15], vec![false; 4]).is_err());
+        assert!(gpui::CustomCursor::new(2, 2, 0, 0, vec![0; 16], vec![false; 3]).is_err());
+        let cursor = gpui::CustomCursor::new(2, 2, 1, 1, vec![255; 16], vec![false; 4]).unwrap();
+        let clone = cursor.clone();
+        let style = cursor.style();
+        assert!(matches!(style, gpui::CursorStyle::Custom(_)));
+        drop(cursor);
+        assert_eq!(clone.style(), style);
+        let next = gpui::CustomCursor::new(2, 2, 1, 1, vec![255; 16], vec![false; 4]).unwrap();
+        assert_ne!(next.style(), style);
+    }
     #[test]
     fn high_rate_motion_keeps_latest_and_skips_same_remote_pixel() {
         let motion = Motion::default();
@@ -578,12 +594,14 @@ mod gpu_tests {
         width: f32,
         renders: Arc<AtomicUsize>,
         optimized: bool,
+        cursor: Arc<CustomCursor>,
     }
     impl Render for Harness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders.fetch_add(1, Ordering::Relaxed);
             div()
                 .relative()
+                .cursor(self.cursor.style())
                 .w(px(self.width))
                 .h(px(180.))
                 .child(Framebuffer::presentation(
@@ -640,6 +658,19 @@ mod gpu_tests {
                             width: 320.,
                             renders,
                             optimized: true,
+                            cursor: CustomCursor::new(
+                                16,
+                                16,
+                                3,
+                                4,
+                                {
+                                    let mut pixels = [255, 0, 255, 255].repeat(16 * 16);
+                                    pixels[..4].copy_from_slice(&[20, 40, 80, 128]);
+                                    pixels
+                                },
+                                vec![false; 16 * 16],
+                            )
+                            .unwrap(),
                         })
                     },
                 )
@@ -661,6 +692,28 @@ mod gpu_tests {
                     "cursor redraws must actually render the parent"
                 );
                 assert_eq!(reused, initial, "cursor-only redraws repainted desktop");
+                cx.update(|cx| {
+                    view.update(cx, |view, cx| {
+                        view.cursor = CustomCursor::new(
+                            24,
+                            24,
+                            5,
+                            6,
+                            [10, 200, 30, 255].repeat(24 * 24),
+                            vec![false; 24 * 24],
+                        )
+                        .unwrap();
+                        cx.notify();
+                    })
+                })
+                .unwrap();
+                Timer::after(std::time::Duration::from_millis(100)).await;
+                assert_eq!(
+                    output.load(Ordering::Relaxed),
+                    reused,
+                    "changing the OS cursor must not repaint desktop"
+                );
+
                 cx.update(|cx| {
                     view.update(cx, |view, cx| {
                         view.frame.update(cx, |_, cx| cx.notify());
